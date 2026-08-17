@@ -380,12 +380,15 @@ async function buildCompare(config) {
   state.compareBuilding = true;
   updateCompareUI();
   try {
-    const sections = await deriveSections(state.rawText, config);
+    // 分段/对齐是结构化小任务，强制用快速非推理模型，
+    // 避免用户选了推理模型（如 glm-5）后对比构建慢到像卡死
+    const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
+    const sections = await deriveSections(state.rawText, fastConfig);
     const assigns = {};
     for (const skill of Object.keys(state.generated)) {
       const paras = state.paragraphs[skill];
       assigns[skill] =
-        paras.length > 0 ? await alignSkillToSections(sections, paras, config) : [];
+        paras.length > 0 ? await alignSkillToSections(sections, paras, fastConfig) : [];
     }
     state.compare = { sections, assigns };
   } catch (err) {
@@ -907,8 +910,8 @@ async function generate() {
   // 配图生成（如果开启）
   let imgPromise = null;
   if (imgEnabled) {
-    // 先用 LLM 提取画面描述（不等文字完成，并行跑）
-    imgPromise = deriveImagePrompts(raw, config)
+    // 先用 LLM 提取画面描述（不等文字完成，并行跑；用快速模型避免推理模型拖慢）
+    imgPromise = deriveImagePrompts(raw, { ...config, model: 'deepseek/deepseek-v4-flash' })
       .then((prompts) => generateAllImages(prompts, config))
       .catch((err) => {
         console.error('配图生成失败:', err);
@@ -948,13 +951,13 @@ async function regenerateColumn(skill) {
   if (result.ok) {
     $('statusText').textContent = `${skill} 已重新生成`;
     toast(`${skill} 已更新`);
-    // 重新生成了该列 → 若对比数据存在，重新映射该列
+    // 重新生成了该列 → 若对比数据存在，重新映射该列（用快速模型）
     if (state.compare) {
       try {
         state.compare.assigns[skill] = await alignSkillToSections(
           state.compare.sections,
           state.paragraphs[skill],
-          config
+          { ...config, model: 'deepseek/deepseek-v4-flash' }
         );
         if (state.viewMode === 'compare') renderCompare();
         toast('分段对比已更新');
