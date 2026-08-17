@@ -21,13 +21,13 @@ const IMAGIFLY_ENABLED = !!import.meta.env.VITE_IMAGIFLY_ENABLED;
 const SKILL_PROMPTS = {
   'human-writing':
     skillHumanWriting +
-    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。直接输出改写后的正文，不要输出标题、不要展示内部提纲、不要解释你做了什么。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只快速确认改写要点（语气/口吻/关键改法），不要逐句分析原文，不要预写草稿。把篇幅留给正文输出。',
+    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。直接输出改写后的正文，不要输出标题、不要展示内部提纲、不要解释你做了什么。\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点（语气/口吻/关键改法），不要逐句分析原文，不要预写草稿。',
   'humanizer-zh':
     skillHumanizerZh +
-    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的 24 条 AI 写作特征清单逐条检查并改写。直接输出改写后的正文，不要附更改总结、不要评分、不要解释。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只标记命中的特征（如「第3条 排比、第7条 空洞总结」），不要逐条复述规则全文，不要预写草稿。把篇幅留给正文输出。',
+    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的特征清单凭语感直接改写。输出要求：\n1. 只输出正文段落，禁止输出任何 markdown 标题（#、##）、禁止评分、禁止附更改总结\n2. 不要解释你做了什么\n\n## 思考约束（重要）\n你的思考过程必须在 300 字以内。禁止在思考中逐条对照特征清单、禁止逐句分析原文、禁止预写草稿。只快速记下 3~5 个命中要点（如「排比、空洞总结、破折号过多」），然后立刻开始写正文。',
   'ljg-plain':
     skillLjgPlain +
-    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。把篇幅留给正文输出。',
+    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。',
 };
 
 /* ===== 状态 ===== */
@@ -63,6 +63,40 @@ function splitParagraphs(text) {
     .split(/\n\s*\n/)
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
+}
+
+/**
+ * 健壮的 JSON 数组提取器。
+ * LLM 输出可能夹带杂质（解释文字、半截 token）或被流截断，
+ * 直接 match(/\[[\s\S]*\]/) + JSON.parse 会把损坏数据当有效数据。
+ * 策略：从首个 [ 开始，用括号配平找完整数组边界，损坏则返回 null。
+ */
+function extractJsonArray(text) {
+  if (!text) return null;
+  const start = text.indexOf('[');
+  if (start === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\') { if (inStr) esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === '[' || ch === '{') depth++;
+    else if (ch === ']' || ch === '}') {
+      depth--;
+      if (depth === 0) {
+        const candidate = text.slice(start, i + 1);
+        try {
+          const arr = JSON.parse(candidate);
+          return Array.isArray(arr) ? arr : null;
+        } catch {
+          return null; // 边界找到了但内容损坏 → 视为失败，交给上层降级
+        }
+      }
+    }
+  }
+  return null; // 流被截断，找不到配平的右括号
 }
 
 /* ===== 页面切换 ===== */
@@ -154,7 +188,7 @@ function updateModelOptions() {
  * 防止「第一次流式输出一半失败 → 重试成功 → 正文出现两遍」。
  */
 async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onRetryReset) {
-  const { model, apiKey, baseUrl } = config;
+  const { model, apiKey, baseUrl, temperature } = config;
   const url = baseUrl.replace(/\/$/, '');
   const proxyUrl = `/llm-proxy?target=${encodeURIComponent(url)}`;
   const trait = getModelTrait(model); // 'normal' | 'reasoning' | 'reasoning_only'
@@ -193,7 +227,7 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onR
             { role: 'user', content: userText },
           ],
           stream: true,
-          temperature: 0.7,
+          temperature: temperature ?? 0.7,
         }),
         signal: controller.signal,
       });
@@ -341,14 +375,11 @@ async function deriveSections(rawText, config) {
 - 不要输出解释、代码块标记`;
 
   try {
-    const result = await callLLM(systemPrompt, rawText, config, () => {});
+    const result = await callLLM(systemPrompt, rawText, { ...config, temperature: 0 }, () => {});
     const text = result.text || '';
-    const match = text.match(/\[[\s\S]*\]/);
-    if (match) {
-      const arr = JSON.parse(match[0]);
-      if (Array.isArray(arr) && arr.length >= 2) {
-        return arr.map((s) => ({ title: s.title || '', gist: s.gist || '' }));
-      }
+    const arr = extractJsonArray(text);
+    if (arr && arr.length >= 2) {
+      return arr.map((s) => ({ title: s.title || '', gist: s.gist || '' }));
     }
   } catch {}
   // 回退：按原文空行分段
@@ -388,16 +419,20 @@ ${paraList}
 - 不要输出解释`;
 
   try {
-    const result = await callLLM(systemPrompt, '开始对齐', config, () => {});
+    // 结构化映射任务用温度 0：实测温度 0.7 下 flash 模型会偶发漏数
+    // （返回数组比段落数少 1~2 项），导致整体降级为顺序分配
+    const result = await callLLM(systemPrompt, '开始对齐', { ...config, temperature: 0 }, () => {});
     const text = result.text || '';
-    const match = text.match(/\[[\s\S]*\]/);
-    if (match) {
-      const arr = JSON.parse(match[0]);
-      if (Array.isArray(arr) && arr.length === skillParas.length) {
-        return arr.map((n) => {
-          const v = parseInt(n);
-          return Number.isInteger(v) && v >= -1 && v < sections.length ? v : -1;
-        });
+    const arr = extractJsonArray(text);
+    if (arr && arr.every((n) => Number.isInteger(n))) {
+      const valid = (v) => (v >= -1 && v < sections.length ? v : -1);
+      // 长度精确匹配：直接用
+      if (arr.length === skillParas.length) return arr.map(valid);
+      // 偏差 1~2 项（模型偶发漏数）：按邻近填充修补，仍可保留绝大部分正确映射
+      if (Math.abs(arr.length - skillParas.length) <= 2) {
+        const out = arr.slice(0, skillParas.length).map(valid);
+        while (out.length < skillParas.length) out.push(out.length ? out[out.length - 1] : 0);
+        return out;
       }
     }
   } catch {}
@@ -599,18 +634,14 @@ async function deriveImagePrompts(rawText, config) {
 - 不要输出任何解释、标题、代码块标记`;
 
   try {
-    const result = await callLLM(systemPrompt, rawText, config, () => {});
+    const result = await callLLM(systemPrompt, rawText, { ...config, temperature: 0.3 }, () => {});
     const text = result.text || '';
-    // 尝试提取 JSON 数组
-    const match = text.match(/\[[\s\S]*\]/);
-    if (match) {
-      const arr = JSON.parse(match[0]);
-      if (Array.isArray(arr) && arr.length > 0) {
-        return arr.map((item) => ({
-          segment: item.segment || '',
-          prompt: item.prompt || '',
-        }));
-      }
+    const arr = extractJsonArray(text);
+    if (arr && arr.length > 0) {
+      return arr.map((item) => ({
+        segment: item.segment || '',
+        prompt: item.prompt || '',
+      }));
     }
   } catch {}
   // 回退：按原文段落拆分取前 3 段
@@ -890,7 +921,11 @@ async function generateColumn(skill, rawText, config) {
     }
 
     state.generated[skill] = result.text;
-    state.paragraphs[skill] = splitParagraphs(result.text);
+    // 剥离 markdown 标题行再分段：某些模型无视「不要输出标题」的指令，
+    // 标题行若混入段落会干扰分段对比的对齐
+    state.paragraphs[skill] = splitParagraphs(
+      result.text.replace(/^#{1,6}\s+.*$/gm, '').trim()
+    );
     if (streamCard) streamCard.classList.remove('cursor-blink');
     renderColumnCards(skill);
     return { ok: true };
