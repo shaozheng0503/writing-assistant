@@ -104,7 +104,7 @@ export const LLM_PROVIDERS = {
 export const MODEL_TRAITS = {
   // deepseek 系列
   'deepseek/deepseek-v4-flash': 'normal',
-  'deepseek/deepseek-v4-flash-0731': 'reasoning_only',
+  'deepseek/deepseek-v4-flash-0731': 'reasoning',
   'deepseek/deepseek-v4-pro': 'reasoning',
   // z-ai glm 系列
   'z-ai/glm-5': 'reasoning',

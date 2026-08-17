@@ -12,7 +12,17 @@
 <div id="page-input">
   <div class="input-wrap">
 
-    <div class="logo">写作辅助工作台</div>
+    <!-- 上次存稿恢复条 -->
+    <div class="resume-bar" id="resumeBar" style="display:none">
+      <span id="resumeInfo"></span>
+      <button class="btn btn-sm" onclick="__resumeStitch()">恢复</button>
+      <button class="btn btn-sm" onclick="__discardStitch()">丢弃，开新稿</button>
+    </div>
+
+    <div class="logo-row">
+      <div class="logo">写作辅助工作台</div>
+      <button class="btn btn-sm theme-btn" onclick="toggleTheme()" title="切换明暗主题" id="themeBtn1">🌙</button>
+    </div>
     <div class="sub">
       粘贴你的原始内容，三个技能各出一版，你挑最好的拼成终稿<br>
       <span class="skill-tags">
@@ -84,6 +94,7 @@
   <div class="topbar">
     <span class="title">写作辅助工作台</span>
     <button class="btn back-btn" id="backBtn">← 重新输入</button>
+    <button class="btn btn-sm theme-btn" onclick="toggleTheme()" title="切换明暗主题" id="themeBtn2">🌙</button>
     <div class="view-switch" id="viewSwitch" style="display:none">
       <button class="btn btn-sm view-btn active" id="viewFreeBtn" onclick="switchView('free')">自由视图</button>
       <button class="btn btn-sm view-btn" id="viewCompareBtn" onclick="switchView('compare')">分段对比</button>

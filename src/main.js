@@ -99,6 +99,22 @@ function extractJsonArray(text) {
   return null; // 流被截断，找不到配平的右括号
 }
 
+/* ===== 主题切换（明/暗） ===== */
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  const icon = theme === 'dark' ? '☀️' : '🌙';
+  const b1 = $('themeBtn1'); const b2 = $('themeBtn2');
+  if (b1) b1.textContent = icon;
+  if (b2) b2.textContent = icon;
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
+  const next = cur === 'dark' ? 'light' : 'dark';
+  localStorage.setItem('ww_theme', next);
+  applyTheme(next);
+}
+applyTheme(localStorage.getItem('ww_theme') || 'light');
+
 /* ===== 页面切换 ===== */
 function showInputPage() {
   $('page-input').style.display = 'flex';
@@ -264,6 +280,36 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onR
       let full = '';
       let reasoning = '';
       let buffer = '';
+      // 运行时特性纠正：供应商会调整模型行为（如 flash-0731 曾从只出 reasoning
+      // 变为 reasoning+content 双出），静态特性表会过时。
+      // 以「流里实际出现过什么字段」为准：
+      // - 标 normal/reasoning_only，但流里双出 → 自动按 reasoning 处理（思考归面板）
+      // - 流结束时正文为空但 reasoning 有内容 → reasoning 当正文（reasoning_only 行为）
+      let sawReasoning = false;
+      let sawContent = false;
+      let effectiveTrait = trait;
+      const applyDelta = (d) => {
+        if (effectiveTrait === 'reasoning') {
+          if (d.reasoning_content) {
+            reasoning += d.reasoning_content;
+            if (onReasoning) onReasoning(d.reasoning_content);
+          }
+          if (d.content) {
+            full += d.content;
+            if (onChunk) onChunk(d.content);
+          }
+        } else if (effectiveTrait === 'reasoning_only') {
+          if (d.reasoning_content) {
+            full += d.reasoning_content;
+            if (onChunk) onChunk(d.reasoning_content);
+          }
+        } else {
+          if (d.content) {
+            full += d.content;
+            if (onChunk) onChunk(d.content);
+          }
+        }
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -279,43 +325,27 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onR
           try {
             const json = JSON.parse(data);
             const delta = json.choices?.[0]?.delta;
-            if (delta) {
-              // 根据模型特性决定如何处理 reasoning_content
-              if (trait === 'reasoning_only') {
-                // 正文全部在 reasoning_content 里（glm-5.1/5.2, flash-0731）
-                // reasoning_content 当正文渲染，忽略 content
-                if (delta.reasoning_content) {
-                  full += delta.reasoning_content;
-                  if (onChunk) onChunk(delta.reasoning_content);
-                }
-              } else if (trait === 'reasoning') {
-                // 推理模型：先思考后正文（glm-5, deepseek-v4-pro）
-                // reasoning_content → 思考面板，content → 正文
-                if (delta.reasoning_content) {
-                  reasoning += delta.reasoning_content;
-                  if (onReasoning) onReasoning(delta.reasoning_content);
-                }
-                if (delta.content) {
-                  full += delta.content;
-                  if (onChunk) onChunk(delta.content);
-                }
-              } else {
-                // 普通模型：只有 content
-                if (delta.content) {
-                  full += delta.content;
-                  if (onChunk) onChunk(delta.content);
-                }
-                // 兜底：如果普通模型也输出了 reasoning_content 但没有 content
-                if (!delta.content && delta.reasoning_content) {
-                  full += delta.reasoning_content;
-                  if (onChunk) onChunk(delta.reasoning_content);
-                }
-              }
+            if (!delta) continue;
+            if (delta.reasoning_content) sawReasoning = true;
+            if (delta.content) sawContent = true;
+            // 双流纠正：标错为 normal/reasoning_only 的模型实际是思考+正文双输出
+            // 切换前先把已按旧规则渲染进正文/思考的内容撤回（full 已渲染给 onChunk，
+            // 由外层的段落重建兜底；这里只保证最终返回值正确分区）
+            if (sawReasoning && sawContent && effectiveTrait !== 'reasoning') {
+              console.warn(`[callLLM] 特性纠正: ${model} 标记为 ${trait}，实际输出思考+正文双流，按 reasoning 处理`);
+              full = '';
+              effectiveTrait = 'reasoning';
             }
+            applyDelta(delta);
           } catch {}
         }
       }
       clearTimeout(idleTimer);
+      // 流结束纠正：全程只出了 reasoning 没有 content → 该模型正文全在 reasoning 里
+      if (!full && reasoning) {
+        console.warn(`[callLLM] 特性纠正: ${model} 正文为空，reasoning 当正文（reasoning_only 行为）`);
+        return { text: reasoning, reasoning: '' };
+      }
       // 空结果兜底：流正常结束但一个字都没有（异常空响应）→ 触发重试
       if (!full && !reasoning) {
         lastErr = new Error('模型返回了空响应');
@@ -1361,17 +1391,38 @@ function clearStitch() {
   toast('已清空');
 }
 
-/* ===== 自动存稿 ===== */
+/* ===== 自动存稿（带恢复确认） ===== */
 function saveStitch() {
   localStorage.setItem('ww_stitch', JSON.stringify(state.stitch));
 }
-function loadStitch() {
+/**
+ * 启动时检测上次存稿。有的话不直接塞回页面，而是弹确认条：
+ * 用户点「恢复」才载入；点「丢弃」清掉存稿开新稿。
+ * （旧行为：无条件恢复 → 重新打开 webui 会被上次的拼接内容打个措手不及）
+ */
+function checkSavedStitch() {
   const raw = localStorage.getItem('ww_stitch');
   if (!raw) return;
-  try {
-    state.stitch = JSON.parse(raw);
+  let saved;
+  try { saved = JSON.parse(raw); } catch { localStorage.removeItem('ww_stitch'); return; }
+  if (!Array.isArray(saved) || saved.length === 0) return;
+  const bar = $('resumeBar');
+  const nText = saved.filter((s) => s.type === 'text').length;
+  const nImg = saved.filter((s) => s.type === 'image').length;
+  $('resumeInfo').textContent = `检测到上次未完成的拼接稿（${nText} 段文字${nImg ? ` + ${nImg} 张图` : ''}）`;
+  bar.style.display = 'flex';
+  window.__resumeStitch = () => {
+    state.stitch = saved;
     renderStitch();
-  } catch {}
+    bar.style.display = 'none';
+    toast('已恢复上次的拼接稿');
+  };
+  window.__discardStitch = () => {
+    localStorage.removeItem('ww_stitch');
+    state.stitch = [];
+    bar.style.display = 'none';
+    toast('已丢弃，开新稿');
+  };
 }
 
 /* ===== 导出（多格式：富文本图文 / 纯文本 / Markdown / HTML 下载） ===== */
@@ -1588,6 +1639,7 @@ window.openImageFolder = async function () {
     toast('打开失败');
   }
 };
+window.toggleTheme = toggleTheme;
 
 /* ===== 初始化 ===== */
 $('generateBtn').addEventListener('click', generate);
@@ -1614,7 +1666,7 @@ document.addEventListener('keydown', (e) => {
 
 updateModelOptions();
 loadKey();
-loadStitch();
+checkSavedStitch();
 
 // 配图开关：仅在 imagifly cookie 已配置时显示
 if (IMAGIFLY_ENABLED && $('imgToggleRow')) {
