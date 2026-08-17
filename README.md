@@ -1,5 +1,10 @@
 # 写作辅助工作台
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Tech: Vite](https://img.shields.io/badge/Tech-Vite-646CFF.svg)](https://vitejs.dev)
+[![Models: 13](https://img.shields.io/badge/LLM-%E5%85%B1%E7%BB%A9%E7%AE%97%E5%8A%9B%2013%E6%A8%A1%E5%9E%8B-blue)](https://console.suanli.cn/models)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/shaozheng0503/writing-assistant/pulls)
+
 > 三技能对比 + 手动拼接 + 自动配图，去除 AI 味，写出像人写的文字。
 
 一个写作辅助工具。粘贴你的原始内容（AI 生成的初稿、草稿、提纲等），三个「去 AI 味」技能各出一版并排展示，你从三列结果中挑选最好的段落，手动拼装成最终属于自己的正文。生成文字的同时，还能自动从原文分段提取画面描述，调用 Imagifly 生成 3~5 张配图，拖拽到拼接区与文字交错混排。
