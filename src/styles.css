@@ -247,6 +247,14 @@ body{
 .reasoning-header:hover{background:#eef3f0}
 .reasoning-icon{font-size:13px}
 .reasoning-label{font-weight:600;color:var(--c2)}
+.reasoning-meter{
+  font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums;
+  background:var(--surface3);padding:1px 9px;border-radius:999px;font-weight:500;
+}
+/* 思考进行中：呼吸动画；完成后静止（JS 改文案时自动去掉类） */
+.reasoning-panel:not(.done) .reasoning-meter{animation:meter-pulse 2s ease-in-out infinite}
+@keyframes meter-pulse{50%{opacity:.55}}
+.reasoning-panel.done .reasoning-meter{color:var(--c2);background:#e6f6ef}
 .reasoning-toggle{margin-left:auto;font-size:11px;color:var(--accent);font-weight:600}
 .reasoning-body{
   padding:10px 15px;font-size:13.5px;line-height:1.85;color:#52616f;
@@ -339,6 +347,9 @@ body{
   color:#9aa4b5;font-size:12.5px;display:flex;align-items:center;justify-content:center;
   min-height:72px;padding:12px;background:var(--surface2);
 }
+/* 新增内容行（-1 段落） */
+.cmp-row-extra .cmp-sec{border-style:dashed;border-color:#f0d9ae;background:#fdf9f0}
+.cmp-row-extra .cmp-sec-title{color:var(--c3)}
 
 /* ===== RESPONSIVE ===== */
 @media(max-width:1024px){

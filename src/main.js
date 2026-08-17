@@ -435,7 +435,18 @@ function renderCompare() {
   }
   const { sections, assigns } = state.compare;
   const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
-  wrap.innerHTML = sections
+
+  const renderCell = (pid, pi, paras) => {
+    const isSel = state.selectedPicks.has(pid);
+    return `<div class="para-card cmp-card ${isSel ? 'selected' : ''}" data-pid="${pid}">
+      <span class="pnum">${pi + 1}</span>
+      <p>${escapeHtml(paras[pi])}</p>
+      <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
+      <span class="pick-hint">双击收入拼接区</span>
+    </div>`;
+  };
+
+  const rows = sections
     .map((sec, si) => {
       const cells = skills
         .map((skill) => {
@@ -446,20 +457,7 @@ function renderCompare() {
           if (mine.length === 0) {
             return `<div class="cmp-cell cmp-empty"><span>（此段无对应输出）</span></div>`;
           }
-          return mine
-            .map(
-              ({ pi }) => {
-                const pid = `${skill}::${pi}`;
-                const isSel = state.selectedPicks.has(pid);
-                return `<div class="para-card cmp-card ${isSel ? 'selected' : ''}" data-pid="${pid}">
-                  <span class="pnum">${pi + 1}</span>
-                  <p>${escapeHtml(paras[pi])}</p>
-                  <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
-                  <span class="pick-hint">双击收入拼接区</span>
-                </div>`;
-              }
-            )
-            .join('');
+          return `<div class="cmp-cell">${mine.map(({ pi }) => renderCell(`${skill}::${pi}`, pi, paras)).join('')}</div>`;
         })
         .join('');
       return `<div class="cmp-row">
@@ -472,6 +470,35 @@ function renderCompare() {
       </div>`;
     })
     .join('');
+
+  // 附加行：各 skill 标记为 -1 的「新增内容」（原文没有对应部分）
+  const extraHasAny = skills.some(
+    (skill) => (assigns[skill] || []).some((t) => t === -1) && (state.paragraphs[skill] || []).length > 0
+  );
+  let extraRows = '';
+  if (extraHasAny) {
+    const cells = skills
+      .map((skill) => {
+        const paras = state.paragraphs[skill] || [];
+        const mine = (assigns[skill] || [])
+          .map((target, pi) => ({ target, pi }))
+          .filter((x) => x.target === -1);
+        if (mine.length === 0) {
+          return `<div class="cmp-cell cmp-empty"><span>（无新增）</span></div>`;
+        }
+        return `<div class="cmp-cell">${mine.map(({ pi }) => renderCell(`${skill}::${pi}`, pi, paras)).join('')}</div>`;
+      })
+      .join('');
+    extraRows = `<div class="cmp-row cmp-row-extra">
+      <div class="cmp-sec">
+        <div class="cmp-sec-title">✦ 新增内容</div>
+        <div class="cmp-sec-gist">原文中没有对应部分的补充段落（如结尾总结）</div>
+      </div>
+      <div class="cmp-cells">${cells}</div>
+    </div>`;
+  }
+
+  wrap.innerHTML = rows + extraRows;
   // 绑定卡片交互（与自由视图一致）
   wrap.querySelectorAll('.para-card[data-pid]').forEach((card) => {
     card.addEventListener('click', () => togglePick(card.dataset.pid));
@@ -704,6 +731,39 @@ async function generateColumn(skill, rawText, config) {
   let streamCard = null;
   let reasoningPanel = null;
   let reasoningText = '';
+  let reasoningChars = 0;
+  let reasoningTimer = null;
+  let reasoningStart = 0;
+  let reasoningDone = false;
+
+  // 思考进度：每秒更新「已思考 Xs · Y 字」
+  const startReasoningProgress = () => {
+    reasoningStart = Date.now();
+    const update = () => {
+      if (reasoningDone) return;
+      const sec = Math.floor((Date.now() - reasoningStart) / 1000);
+      const timeStr = sec >= 60 ? `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s` : `${sec}s`;
+      const meter = reasoningPanel?.querySelector('.reasoning-meter');
+      if (meter) {
+        meter.textContent = reasoningChars > 0
+          ? `已思考 ${timeStr} · ${reasoningChars} 字`
+          : `已思考 ${timeStr}`;
+      }
+    };
+    update();
+    reasoningTimer = setInterval(update, 1000);
+  };
+  const stopReasoningProgress = (finished) => {
+    reasoningDone = true;
+    if (reasoningTimer) { clearInterval(reasoningTimer); reasoningTimer = null; }
+    const meter = reasoningPanel?.querySelector('.reasoning-meter');
+    if (meter && finished && reasoningStart) {
+      const sec = Math.floor((Date.now() - reasoningStart) / 1000);
+      const timeStr = sec >= 60 ? `${Math.floor(sec / 60)}m${String(sec % 60).padStart(2, '0')}s` : `${sec}s`;
+      meter.textContent = `思考完成 · ${timeStr} · ${reasoningChars} 字`;
+      reasoningPanel?.classList.add('done');
+    }
+  };
 
   try {
     const result = await callLLM(
@@ -712,6 +772,8 @@ async function generateColumn(skill, rawText, config) {
       config,
       // 正文回调
       (delta) => {
+        // 正文开始 → 停止计时（正文已出，无需再提示预期）
+        if (!reasoningDone) stopReasoningProgress(false);
         if (!streamCard) {
           container.innerHTML = '';
           // 如果有思考面板，插在正文前面
@@ -735,6 +797,7 @@ async function generateColumn(skill, rawText, config) {
             <div class="reasoning-header" onclick="this.parentElement.classList.toggle('collapsed')">
               <span class="reasoning-icon">💭</span>
               <span class="reasoning-label">思考过程</span>
+              <span class="reasoning-meter">已思考 0s</span>
               <span class="reasoning-toggle">展开</span>
             </div>
             <div class="reasoning-body"></div>`;
@@ -746,8 +809,10 @@ async function generateColumn(skill, rawText, config) {
             container.innerHTML = '';
             container.appendChild(reasoningPanel);
           }
+          startReasoningProgress();
         }
         reasoningText += delta;
+        reasoningChars = reasoningText.length;
         reasoningPanel.querySelector('.reasoning-body').textContent += delta;
         // 思考阶段自动展开，正文开始后自动收起
         if (!streamCard && !reasoningPanel.classList.contains('expanded-once')) {
@@ -759,6 +824,7 @@ async function generateColumn(skill, rawText, config) {
 
     // 正文开始后自动收起思考面板
     if (reasoningPanel) {
+      stopReasoningProgress(true);
       reasoningPanel.classList.add('collapsed');
       const toggle = reasoningPanel.querySelector('.reasoning-toggle');
       if (toggle) toggle.textContent = '展开';
@@ -770,6 +836,7 @@ async function generateColumn(skill, rawText, config) {
     renderColumnCards(skill);
     return { ok: true };
   } catch (err) {
+    stopReasoningProgress(false);
     container.innerHTML = `<div class="error-text">调用失败<br><span class="err-detail">${escapeHtml(err.message)}</span></div>`;
     return { ok: false, error: err.message };
   } finally {
