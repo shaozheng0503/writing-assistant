@@ -21,13 +21,13 @@ const IMAGIFLY_ENABLED = !!import.meta.env.VITE_IMAGIFLY_ENABLED;
 const SKILL_PROMPTS = {
   'human-writing':
     skillHumanWriting +
-    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。直接输出改写后的正文，不要输出标题、不要展示内部提纲、不要解释你做了什么。',
+    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。直接输出改写后的正文，不要输出标题、不要展示内部提纲、不要解释你做了什么。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只快速确认改写要点（语气/口吻/关键改法），不要逐句分析原文，不要预写草稿。把篇幅留给正文输出。',
   'humanizer-zh':
     skillHumanizerZh +
-    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的 24 条 AI 写作特征清单逐条检查并改写。直接输出改写后的正文，不要附更改总结、不要评分、不要解释。',
+    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的 24 条 AI 写作特征清单逐条检查并改写。直接输出改写后的正文，不要附更改总结、不要评分、不要解释。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只标记命中的特征（如「第3条 排比、第7条 空洞总结」），不要逐条复述规则全文，不要预写草稿。把篇幅留给正文输出。',
   'ljg-plain':
     skillLjgPlain +
-    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。',
+    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。\n\n## 思考约束\n如果你有思考过程，请控制在 500 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。把篇幅留给正文输出。',
 };
 
 /* ===== 状态 ===== */
@@ -148,19 +148,37 @@ function updateModelOptions() {
   }
 }
 
-/* ===== 调用 LLM（流式 + 超时 + 重试 + 模型特性适配） ===== */
-async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
+/* ===== 调用 LLM（流式 + 超时 + 重试 + 模型特性适配 + 空闲看门狗） ===== */
+/**
+ * onRetryReset（可选第 6 参）：重试开始前回调，调用方用它清空已渲染的残留输出，
+ * 防止「第一次流式输出一半失败 → 重试成功 → 正文出现两遍」。
+ */
+async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onRetryReset) {
   const { model, apiKey, baseUrl } = config;
   const url = baseUrl.replace(/\/$/, '');
   const proxyUrl = `/llm-proxy?target=${encodeURIComponent(url)}`;
   const trait = getModelTrait(model); // 'normal' | 'reasoning' | 'reasoning_only'
   const MAX_RETRIES = 2;
+  const RETRY_DELAYS = [1000, 3000]; // 递增间隔：1s → 3s
+  // 推理模型（GLM-5/5.1/5.2 等）思考过程可能很长
+  const isReasoning = trait !== 'normal';
+  const TIMEOUT_MS = isReasoning ? 300000 : 120000; // 推理 300s / 普通 120s
+  const IDLE_TIMEOUT_MS = 60000; // 流空闲看门狗：60s 无任何 chunk 判定连接挂起
   let lastErr;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    // 重试前重置：调用方清掉上次残留的半截输出（第一次尝试时也调用是安全的）
+    if (onRetryReset) onRetryReset();
+
     const controller = new AbortController();
-    // 推理模型（GLM-5/5.1/5.2 等）思考过程可能很长，超时设 180s
-    const timeout = setTimeout(() => controller.abort(), 180000);
+    const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
+    // 空闲看门狗：流式传输中若长时间无新数据，主动断开（防代理静默挂起）
+    let idleTimedOut = false;
+    let idleTimer = setTimeout(() => { idleTimedOut = true; controller.abort(); }, IDLE_TIMEOUT_MS);
+    const kickIdle = () => {
+      clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => { idleTimedOut = true; controller.abort(); }, IDLE_TIMEOUT_MS);
+    };
     try {
       const response = await fetch(proxyUrl, {
         method: 'POST',
@@ -191,7 +209,7 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
         }
         lastErr = new Error(`HTTP ${response.status}: ${friendly}`);
         if (attempt < MAX_RETRIES) {
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt] || 3000));
           continue;
         }
         throw lastErr;
@@ -215,6 +233,7 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        kickIdle(); // 收到数据，重置空闲看门狗
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop();
@@ -262,13 +281,29 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
           } catch {}
         }
       }
+      clearTimeout(idleTimer);
+      // 空结果兜底：流正常结束但一个字都没有（异常空响应）→ 触发重试
+      if (!full && !reasoning) {
+        lastErr = new Error('模型返回了空响应');
+        if (attempt < MAX_RETRIES) {
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt] || 3000));
+          continue;
+        }
+        throw lastErr;
+      }
       return { text: full, reasoning };
     } catch (err) {
       clearTimeout(timeout);
+      clearTimeout(idleTimer);
       if (err.name === 'AbortError') {
-        lastErr = new Error('请求超时（180秒），推理模型思考可能较慢，建议换 flash 版本重试');
+        // 区分总超时 vs 空闲挂起，给出针对性提示
+        lastErr = new Error(
+          idleTimedOut
+            ? `连接挂起（${IDLE_TIMEOUT_MS / 1000}s 无数据），网络或代理中断`
+            : `请求超时（${TIMEOUT_MS / 1000}秒），推理模型思考可能较慢，建议换 flash 版本`
+        );
         if (attempt < MAX_RETRIES) {
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt] || 3000));
           continue;
         }
         throw lastErr;
@@ -276,7 +311,7 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
       if (err.message && !err.message.startsWith('HTTP 4')) {
         lastErr = err;
         if (attempt < MAX_RETRIES) {
-          await new Promise((r) => setTimeout(r, 1000 * (attempt + 1)));
+          await new Promise((r) => setTimeout(r, RETRY_DELAYS[attempt] || 3000));
           continue;
         }
       }
@@ -821,12 +856,28 @@ async function generateColumn(skill, rawText, config) {
         }
         reasoningText += delta;
         reasoningChars = reasoningText.length;
-        reasoningPanel.querySelector('.reasoning-body').textContent += delta;
+        const body = reasoningPanel.querySelector('.reasoning-body');
+        body.textContent += delta;
+        // 防超长思考链拖慢 DOM：面板内只保留最近 4000 字
+        if (reasoningChars > 4000 && body.textContent.length > 4000) {
+          body.textContent = '（前文思考过长已折叠）\n…' + body.textContent.slice(-4000);
+        }
         // 思考阶段自动展开，正文开始后自动收起
         if (!streamCard && !reasoningPanel.classList.contains('expanded-once')) {
           reasoningPanel.classList.remove('collapsed');
         }
         container.scrollTop = container.scrollHeight;
+      },
+      // 重试前重置：清空上一次尝试残留的半截输出（防重试后正文出现两遍）
+      () => {
+        streamCard = null;
+        reasoningPanel = null;
+        reasoningText = '';
+        reasoningChars = 0;
+        reasoningDone = false;
+        if (reasoningTimer) { clearInterval(reasoningTimer); reasoningTimer = null; }
+        container.innerHTML =
+          '<div class="thinking"><div class="dots"><span></span><span></span><span></span></div>连接中断，自动重试…</div>';
       }
     );
 

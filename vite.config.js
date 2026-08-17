@@ -77,20 +77,33 @@ function imagiflyProxyPlugin(cookie) {
   return {
     name: 'imagifly-proxy',
     configureServer(server) {
-      // 提交生图请求
+      // 提交生图请求（带 1 次自动重试：Imagifly 偶发 5xx/网络抖动）
       server.middlewares.use('/imagifly-proxy/submit', async (req, res) => {
         if (req.method !== 'POST') {
           res.statusCode = 405;
           res.end(JSON.stringify({ error: 'Method not allowed' }));
           return;
         }
+        let parsed;
         try {
           const chunks = [];
           for await (const chunk of req) chunks.push(chunk);
-          const body = Buffer.concat(chunks).toString();
-          const { prompt, model, size, imageCount } = JSON.parse(body);
+          parsed = JSON.parse(Buffer.concat(chunks).toString());
+        } catch (e) {
+          res.statusCode = 400;
+          res.end(JSON.stringify({ error: `Bad request body: ${e.message}` }));
+          return;
+        }
+        const { prompt, model, size, imageCount } = parsed;
+        const payload = JSON.stringify({
+          prompt,
+          model: model || 'nano-banana-2',
+          size: size || '1368x768',
+          imageCount: imageCount || 1,
+        });
 
-          const apiRes = await fetch(`${BASE}/api/images/generate`, {
+        const doSubmit = () =>
+          fetch(`${BASE}/api/images/generate`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -99,14 +112,16 @@ function imagiflyProxyPlugin(cookie) {
               'User-Agent': UA,
               'Accept': 'application/json, */*',
             },
-            body: JSON.stringify({
-              prompt,
-              model: model || 'nano-banana-2',
-              size: size || '1368x768',
-              imageCount: imageCount || 1,
-            }),
+            body: payload,
           });
 
+        try {
+          let apiRes = await doSubmit();
+          // 5xx / 网络错误重试一次（间隔 3s）；4xx 不重试（请求本身有问题）
+          if (apiRes.status >= 500) {
+            await new Promise((r) => setTimeout(r, 3000));
+            apiRes = await doSubmit();
+          }
           const apiText = await apiRes.text();
           let apiJson;
           try { apiJson = JSON.parse(apiText); } catch { apiJson = { raw: apiText }; }
