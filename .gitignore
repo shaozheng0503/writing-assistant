@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist_test/
+dist_check2/
+dist_final/
+.vite/
+.env
+_mock_llm.mjs
+_verify_chain.mjs
+*.log
+*.timestamp-*.mjs
+.DS_Store

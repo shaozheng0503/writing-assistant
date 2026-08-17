@@ -1,0 +1,22 @@
+{
+  "name": "writing-workbench",
+  "version": "1.0.0",
+  "description": "写作辅助工作台 — 三技能对比 + 手动拼接，去除 AI 味",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "keywords": [
+    "ai-writing",
+    "humanizer",
+    "writing-assistant",
+    "chinese-writing",
+    "anti-ai-detection"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}

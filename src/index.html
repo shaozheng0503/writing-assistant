@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>写作辅助工作台</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<!-- ======== PAGE 1: INPUT ======== -->
+<div id="page-input">
+  <div class="input-wrap">
+
+    <div class="logo">写作辅助工作台</div>
+    <div class="sub">
+      粘贴你的原始内容，三个技能各出一版，你挑最好的拼成终稿<br>
+      <span class="skill-tags">
+        <a href="https://github.com/KKKKhazix/human-writing" target="_blank" class="tag tag-c1">human-writing · 卡兹克</a>
+        <a href="https://github.com/op7418/Humanizer-zh" target="_blank" class="tag tag-c2">humanizer-zh · 归藏</a>
+        <a href="https://github.com/lijigang/ljg-skills" target="_blank" class="tag tag-c3">ljg-plain · 李继刚</a>
+      </span>
+    </div>
+
+    <!-- LLM 配置区 -->
+    <div class="llm-config" id="llmConfig">
+      <div class="llm-row">
+        <div class="llm-field">
+          <label>Provider</label>
+          <select id="llmProvider">
+            <option value="suanli" selected>共绩算力 MaaS</option>
+            <option value="openai">OpenAI</option>
+            <option value="deepseek">DeepSeek</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="custom">自定义 (OpenAI 兼容)</option>
+          </select>
+        </div>
+        <div class="llm-field">
+          <label>Model</label>
+          <select id="llmModel"></select>
+          <input type="text" id="llmModelCustom" placeholder="模型名" style="display:none">
+        </div>
+        <div class="llm-field" id="baseUrlWrap" style="display:none">
+          <label>Base URL</label>
+          <input type="text" id="llmBaseUrl" placeholder="https://your-api.com/v1/chat/completions">
+        </div>
+      </div>
+      <div class="llm-row">
+        <div class="llm-field" style="flex:1">
+          <label>API Key</label>
+          <input type="password" id="llmApiKey" placeholder="sk-...">
+        </div>
+        <button class="btn btn-sm" id="saveKeyBtn">保存</button>
+        <button class="btn btn-sm" id="clearKeyBtn" style="display:none">清除</button>
+      </div>
+      <div class="llm-hint" id="keyStatus">API Key 仅存在本地 localStorage，不会上传</div>
+    </div>
+
+    <textarea id="rawInput" placeholder="在这里粘贴你的原始内容……
+
+可以是 AI 生成的初稿、带有浓重 AI 味的文字、需要改写的草稿等。
+粘贴好后点击下方按钮，三个技能会分别生成各自的版本。
+快捷键：Ctrl+Enter 生成"></textarea>
+
+    <div class="input-actions">
+      <button class="btn" id="demoBtn">载入示例</button>
+      <button class="btn btn-primary" id="generateBtn">生成三版</button>
+    </div>
+
+    <!-- 配图开关 -->
+    <div class="img-toggle-row" id="imgToggleRow" style="display:none">
+      <label class="img-toggle">
+        <input type="checkbox" id="imgToggle" checked>
+        <span class="toggle-track"><span class="toggle-thumb"></span></span>
+        <span class="toggle-label">同时生成 3~5 张配图</span>
+      </label>
+      <span class="img-hint">从原文分段提取画面描述，调用 Imagifly 生成插图，可拖拽到拼接区</span>
+    </div>
+  </div>
+</div>
+
+<!-- ======== PAGE 2: RESULT ======== -->
+<div id="page-result">
+  <div class="topbar">
+    <span class="title">写作辅助工作台</span>
+    <button class="btn back-btn" id="backBtn">← 重新输入</button>
+    <span class="status" id="statusText"></span>
+  </div>
+  <div class="columns">
+    <!-- 配图库 -->
+    <div class="col col-gallery" id="galleryCol" style="display:none">
+      <div class="col-head" style="border-top:3px solid var(--c2)">
+        <span class="col-dot" style="background:var(--c2)"></span>
+        <span>配图库</span>
+        <span class="skill-desc">拖拽到拼接区</span>
+      </div>
+      <div class="col-body" id="col-gallery">
+        <div class="stitch-empty" style="padding:30px 10px">配图将在此显示</div>
+      </div>
+    </div>
+
+    <!-- 三技能列 -->
+    <div class="col">
+      <div class="col-head" style="border-top:3px solid var(--c1)">
+        <span class="col-dot" style="background:var(--c1)"></span>
+        <span>human-writing</span>
+        <span class="skill-desc">卡兹克</span>
+        <button class="btn btn-mini" onclick="addSelectedToStitch('human-writing')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
+        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('human-writing')" title="重新生成此列">↻</button>
+        <button class="btn btn-mini" onclick="pickAll('human-writing')">全选</button>
+      </div>
+      <div class="col-body" id="col-human-writing"></div>
+    </div>
+    <div class="col">
+      <div class="col-head" style="border-top:3px solid var(--c2)">
+        <span class="col-dot" style="background:var(--c2)"></span>
+        <span>humanizer-zh</span>
+        <span class="skill-desc">归藏</span>
+        <button class="btn btn-mini" onclick="addSelectedToStitch('humanizer-zh')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
+        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('humanizer-zh')" title="重新生成此列">↻</button>
+        <button class="btn btn-mini" onclick="pickAll('humanizer-zh')">全选</button>
+      </div>
+      <div class="col-body" id="col-humanizer-zh"></div>
+    </div>
+    <div class="col">
+      <div class="col-head" style="border-top:3px solid var(--c3)">
+        <span class="col-dot" style="background:var(--c3)"></span>
+        <span>ljg-plain</span>
+        <span class="skill-desc">李继刚</span>
+        <button class="btn btn-mini" onclick="addSelectedToStitch('ljg-plain')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
+        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('ljg-plain')" title="重新生成此列">↻</button>
+        <button class="btn btn-mini" onclick="pickAll('ljg-plain')">全选</button>
+      </div>
+      <div class="col-body" id="col-ljg-plain"></div>
+    </div>
+
+    <!-- 拼接区 -->
+    <div class="col col-stitch">
+      <div class="col-head" style="border-top:3px solid var(--accent)">
+        <span class="col-dot" style="background:var(--accent)"></span>
+        <span>拼接区</span>
+        <span class="skill-desc">你的终稿</span>
+        <button class="btn btn-mini" onclick="exportText()">导出</button>
+      </div>
+      <div class="col-body" id="col-stitch">
+        <div class="stitch-empty">双击左侧任意段落<br>或从配图库拖拽图片<br>将它们收入拼接区<br><br>拼接后可拖拽排序、编辑、导出</div>
+      </div>
+      <div class="stitch-toolbar">
+        <button class="btn btn-sm" onclick="deleteStitch()">删除</button>
+        <button class="btn btn-sm" onclick="clearStitch()">清空</button>
+        <span class="status" id="stitchCount"></span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Lightbox 全屏预览 -->
+<div class="lightbox" id="lightbox" style="display:none">
+  <div class="lightbox-backdrop" onclick="closeLightbox()"></div>
+  <img class="lightbox-img" id="lightboxImg" src="" alt="预览" />
+  <div class="lightbox-close" onclick="closeLightbox()">✕</div>
+  <div class="lightbox-caption" id="lightboxCaption"></div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
