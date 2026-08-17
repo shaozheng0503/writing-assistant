@@ -379,6 +379,8 @@ ${paraList}
 async function buildCompare(config) {
   state.compareBuilding = true;
   updateCompareUI();
+  const prevStatus = $('statusText').textContent;
+  $('statusText').textContent = '正在构建分段对比（快速模型，几秒~十几秒）…';
   try {
     // 分段/对齐是结构化小任务，强制用快速非推理模型，
     // 避免用户选了推理模型（如 glm-5）后对比构建慢到像卡死
@@ -391,9 +393,12 @@ async function buildCompare(config) {
         paras.length > 0 ? await alignSkillToSections(sections, paras, fastConfig) : [];
     }
     state.compare = { sections, assigns };
+    $('statusText').textContent = `${prevStatus} · 分段对比就绪，点击顶栏「分段对比」查看`;
+    toast('分段对比已就绪');
   } catch (err) {
     console.error('分段对比构建失败:', err);
     state.compare = null;
+    $('statusText').textContent = prevStatus;
     toast('分段对比构建失败');
   } finally {
     state.compareBuilding = false;
