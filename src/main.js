@@ -41,6 +41,9 @@ const state = {
   selectedStitchIdx: null,
   busy: { 'human-writing': false, 'humanizer-zh': false, 'ljg-plain': false },
   imgBusy: false,
+  compare: null,       // {sections:[{title,gist}], assigns:{skill:[paraIdx→secIdx|-1]}}
+  compareBuilding: false,
+  viewMode: 'free',    // 'free' | 'compare'
 };
 
 let imgIdCounter = 0;
@@ -281,6 +284,227 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning) {
     }
   }
   throw lastErr || new Error('未知错误');
+}
+
+/* ===== 统一分段 + 横向对比 ===== */
+
+/**
+ * 第一步：从原文提取「标准分段」——三个 skill 改写的是同一段原文，
+ * 原文的语义分段就是天然的对齐锚点。
+ * 返回 [{title, gist}, ...]（3~8 段）
+ */
+async function deriveSections(rawText, config) {
+  const systemPrompt = `你是一个文章结构分析器。用户给你一篇原文，请把它按语义拆分成 3~8 个「标准段落」。
+
+输出格式严格为 JSON 数组，不要输出任何其他内容：
+[{"title":"该段小标题(6~12字)","gist":"该段内容概要(30字内)"}]
+
+要求：
+- 按行文逻辑分段（如：引入/背景/展开/案例/转折/收尾），段数依文章长度定，3 到 8 段
+- title 概括该段主题；gist 是该段讲了什么
+- 保持原文的段落顺序
+- 不要输出解释、代码块标记`;
+
+  try {
+    const result = await callLLM(systemPrompt, rawText, config, () => {});
+    const text = result.text || '';
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      const arr = JSON.parse(match[0]);
+      if (Array.isArray(arr) && arr.length >= 2) {
+        return arr.map((s) => ({ title: s.title || '', gist: s.gist || '' }));
+      }
+    }
+  } catch {}
+  // 回退：按原文空行分段
+  const paras = splitParagraphs(rawText);
+  if (paras.length >= 2) {
+    return paras.slice(0, 8).map((p) => ({ title: p.substring(0, 10), gist: p.substring(0, 30) }));
+  }
+  return [{ title: '全文', gist: rawText.substring(0, 30) }];
+}
+
+/**
+ * 第二步：把某个 skill 的输出段落「分配」到标准分段上。
+ * 只让 LLM 输出段落编号 → 标准段编号的映射（数字数组），
+ * 文字本身原样保留（不丢任何细节）。
+ * 返回 number[]，第 i 项 = 该段落归属的标准段 idx；-1 = 无法归属（新增内容）
+ */
+async function alignSkillToSections(sections, skillParas, config) {
+  const sectionList = sections.map((s, i) => `${i}. ${s.title}：${s.gist}`).join('\n');
+  const paraList = skillParas.map((p, i) => `${i}. ${p.substring(0, 120)}`).join('\n');
+
+  const systemPrompt = `你是一个段落对齐器。有一份「标准分段」（从原文提取）和一份「改写稿的段落列表」（某个改写技能的输出，已按空行拆分并编号）。
+
+标准分段：
+${sectionList}
+
+改写稿段落：
+${paraList}
+
+请判断：改写稿的每个段落分别对应当文中的哪个标准段（按内容对应，改写可能合并/拆分/调序/增删，请按主要内容判断归属）。
+
+输出格式严格为 JSON 数字数组，长度必须等于改写稿段落数，不要输出任何其他内容：
+[段0对应的标准段编号, 段1对应的编号, ...]
+
+规则：
+- 每项是 0 到 ${sections.length - 1} 的整数
+- 若某段是改写稿新增的内容（原文没有对应部分），填 -1
+- 不要输出解释`;
+
+  try {
+    const result = await callLLM(systemPrompt, '开始对齐', config, () => {});
+    const text = result.text || '';
+    const match = text.match(/\[[\s\S]*\]/);
+    if (match) {
+      const arr = JSON.parse(match[0]);
+      if (Array.isArray(arr) && arr.length === skillParas.length) {
+        return arr.map((n) => {
+          const v = parseInt(n);
+          return Number.isInteger(v) && v >= -1 && v < sections.length ? v : -1;
+        });
+      }
+    }
+  } catch {}
+  // 回退：顺序平均分配（至少保证视图可用）
+  return skillParas.map((_, i) =>
+    sections.length === 1 ? 0 : Math.min(Math.floor((i / skillParas.length) * sections.length), sections.length - 1)
+  );
+}
+
+/**
+ * 构建对比数据：原文标准分段 + 各 skill 段落映射。
+ * 在三列文字都完成后调用。
+ */
+async function buildCompare(config) {
+  state.compareBuilding = true;
+  updateCompareUI();
+  try {
+    const sections = await deriveSections(state.rawText, config);
+    const assigns = {};
+    for (const skill of Object.keys(state.generated)) {
+      const paras = state.paragraphs[skill];
+      assigns[skill] =
+        paras.length > 0 ? await alignSkillToSections(sections, paras, config) : [];
+    }
+    state.compare = { sections, assigns };
+  } catch (err) {
+    console.error('分段对比构建失败:', err);
+    state.compare = null;
+    toast('分段对比构建失败');
+  } finally {
+    state.compareBuilding = false;
+    updateCompareUI();
+  }
+}
+
+/** 对比视图 / 自由视图切换 */
+function switchView(mode) {
+  state.viewMode = mode;
+  updateCompareUI();
+}
+function updateCompareUI() {
+  const compareBtn = $('viewCompareBtn');
+  const freeBtn = $('viewFreeBtn');
+  const compareRow = $('compareView');
+  const freeWrap = $('columnsWrap');
+  const switchWrap = $('viewSwitch');
+  if (!compareBtn || !freeBtn) return;
+  // 对比数据存在（或构建中）才显示切换按钮
+  switchWrap.style.display = state.compare || state.compareBuilding ? '' : 'none';
+  compareBtn.classList.toggle('active', state.viewMode === 'compare');
+  freeBtn.classList.toggle('active', state.viewMode === 'free');
+  if (state.viewMode === 'compare') {
+    freeWrap.style.display = 'none';
+    compareRow.style.display = 'flex';
+    renderCompare();
+  } else {
+    freeWrap.style.display = '';
+    compareRow.style.display = 'none';
+  }
+}
+
+/** 渲染分段对比视图：每个标准段一行，三 skill 横向并排 */
+function renderCompare() {
+  const wrap = $('compareView');
+  if (!state.compare) {
+    wrap.innerHTML = state.compareBuilding
+      ? '<div class="thinking" style="padding:40px 0;justify-content:center"><div class="dots"><span></span><span></span><span></span></div>正在分析文章结构并对齐三列输出…</div>'
+      : '<div class="stitch-empty" style="margin:40px 20px">分段对比数据不可用<br>可点击「重新生成」后再试</div>';
+    return;
+  }
+  const { sections, assigns } = state.compare;
+  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  wrap.innerHTML = sections
+    .map((sec, si) => {
+      const cells = skills
+        .map((skill) => {
+          const paras = state.paragraphs[skill] || [];
+          const mine = (assigns[skill] || [])
+            .map((target, pi) => ({ target, pi }))
+            .filter((x) => x.target === si);
+          if (mine.length === 0) {
+            return `<div class="cmp-cell cmp-empty"><span>（此段无对应输出）</span></div>`;
+          }
+          return mine
+            .map(
+              ({ pi }) => {
+                const pid = `${skill}::${pi}`;
+                const isSel = state.selectedPicks.has(pid);
+                return `<div class="para-card cmp-card ${isSel ? 'selected' : ''}" data-pid="${pid}">
+                  <span class="pnum">${pi + 1}</span>
+                  <p>${escapeHtml(paras[pi])}</p>
+                  <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
+                  <span class="pick-hint">双击收入拼接区</span>
+                </div>`;
+              }
+            )
+            .join('');
+        })
+        .join('');
+      return `<div class="cmp-row">
+        <div class="cmp-sec">
+          <div class="cmp-sec-title">${si + 1}. ${escapeHtml(sec.title)}</div>
+          <div class="cmp-sec-gist">${escapeHtml(sec.gist)}</div>
+          <button class="btn btn-mini cmp-row-btn" onclick="addCompareRowToStitch(${si})" title="把此段中选中的（或全部）卡片收入拼接区">整行收入</button>
+        </div>
+        <div class="cmp-cells">${cells}</div>
+      </div>`;
+    })
+    .join('');
+  // 绑定卡片交互（与自由视图一致）
+  wrap.querySelectorAll('.para-card[data-pid]').forEach((card) => {
+    card.addEventListener('click', () => togglePick(card.dataset.pid));
+    card.addEventListener('dblclick', () => sendToStitch(card.dataset.pid));
+  });
+}
+
+/** 把对比视图某一行中选中的（或全部）卡片收入拼接区 */
+function addCompareRowToStitch(secIdx) {
+  if (!state.compare) return;
+  const { assigns } = state.compare;
+  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  const picked = [];
+  skills.forEach((skill) => {
+    (assigns[skill] || []).forEach((target, pi) => {
+      if (target === secIdx && state.selectedPicks.has(`${skill}::${pi}`)) {
+        picked.push({ skill, text: state.paragraphs[skill][pi] });
+      }
+    });
+  });
+  const items = picked.length > 0
+    ? picked
+    : skills
+        .map((skill) => {
+          const first = (assigns[skill] || []).findIndex((t) => t === secIdx);
+          return first >= 0 ? { skill, text: state.paragraphs[skill][first] } : null;
+        })
+        .filter(Boolean);
+  if (items.length === 0) { toast('此段没有可收入的内容'); return; }
+  items.forEach((it) => state.stitch.push({ type: 'text', skill: it.skill, text: it.text, editing: false }));
+  renderStitch();
+  saveStitch();
+  toast(`已收入 ${items.length} 段（可在拼接区排序）`);
 }
 
 /* ===== Imagifly 配图生成 ===== */
@@ -602,6 +826,9 @@ async function generate() {
   $('col-gallery').innerHTML = '';
 
   state.selectedPicks.clear();
+  state.compare = null;        // 重置分段对比
+  state.viewMode = 'free';     // 回到自由视图
+  updateCompareUI();
   renderStitch();
   $('statusText').textContent = '三技能并行调用 LLM…';
 
@@ -636,6 +863,8 @@ async function generate() {
       ? `生成完成 · 文字 ${okCount}/3 + 配图 ${imgOk}/${state.images.length}`
       : '生成完成 · 双击段落收入拼接区';
     toast(imgEnabled ? `三版文字 + ${imgOk} 张配图已生成` : '三版已生成');
+    // 构建分段对比（原文标准分段 + 三列映射），不阻塞主流程
+    buildCompare(config);
   } else {
     $('statusText').textContent = `完成 · ${okCount} 成功，${3 - okCount} 失败`;
     toast(`${3 - okCount} 个技能调用失败`);
@@ -652,6 +881,18 @@ async function regenerateColumn(skill) {
   if (result.ok) {
     $('statusText').textContent = `${skill} 已重新生成`;
     toast(`${skill} 已更新`);
+    // 重新生成了该列 → 若对比数据存在，重新映射该列
+    if (state.compare) {
+      try {
+        state.compare.assigns[skill] = await alignSkillToSections(
+          state.compare.sections,
+          state.paragraphs[skill],
+          config
+        );
+        if (state.viewMode === 'compare') renderCompare();
+        toast('分段对比已更新');
+      } catch {}
+    }
   } else {
     $('statusText').textContent = `${skill} 生成失败`;
   }
@@ -1006,6 +1247,8 @@ window.clearStitch = clearStitch;
 window.exportText = exportText;
 window.closeLightbox = closeLightbox;
 window.sendImageToStitch = sendImageToStitch;
+window.switchView = switchView;
+window.addCompareRowToStitch = addCompareRowToStitch;
 
 /* ===== 初始化 ===== */
 $('generateBtn').addEventListener('click', generate);

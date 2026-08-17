@@ -84,9 +84,17 @@
   <div class="topbar">
     <span class="title">写作辅助工作台</span>
     <button class="btn back-btn" id="backBtn">← 重新输入</button>
+    <div class="view-switch" id="viewSwitch" style="display:none">
+      <button class="btn btn-sm view-btn active" id="viewFreeBtn" onclick="switchView('free')">自由视图</button>
+      <button class="btn btn-sm view-btn" id="viewCompareBtn" onclick="switchView('compare')">分段对比</button>
+    </div>
     <span class="status" id="statusText"></span>
   </div>
-  <div class="columns">
+
+  <!-- 分段对比视图 -->
+  <div id="compareView" style="display:none"></div>
+
+  <div class="columns" id="columnsWrap">
     <!-- 配图库 -->
     <div class="col col-gallery" id="galleryCol" style="display:none">
       <div class="col-head" style="border-top:3px solid var(--c2)">
