@@ -7,6 +7,9 @@ dist_final/
 .env
 _mock_llm.mjs
 _verify_chain.mjs
+_test_full.mjs
+_test_article.md
+saved-images/
 *.log
 *.timestamp-*.mjs
 .DS_Store

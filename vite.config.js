@@ -1,4 +1,7 @@
 import { defineConfig, loadEnv } from 'vite';
+import { mkdirSync, writeFileSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
+import { spawn } from 'child_process';
 
 /**
  * LLM CORS 代理插件
@@ -194,10 +197,11 @@ function imagiflyProxyPlugin(cookie) {
         }
       });
 
-      // 下载图片（转发 asset URL，注入 cookie）
+      // 下载图片（转发 asset URL，注入 cookie）；加 save=1 同时落盘到 saved-images/
       server.middlewares.use('/imagifly-proxy/image', async (req, res) => {
         const url = new URL(req.url, 'http://localhost');
         const target = url.searchParams.get('url');
+        const wantSave = url.searchParams.get('save') === '1';
         if (!target) {
           res.statusCode = 400;
           res.end(JSON.stringify({ error: 'Missing url param' }));
@@ -215,11 +219,48 @@ function imagiflyProxyPlugin(cookie) {
 
           // 文件头嗅探
           let ct = imgRes.headers.get('content-type') || 'image/png';
-          if (buf[0] === 0xff && buf[1] === 0xd8) ct = 'image/jpeg';
-          else if (buf[0] === 0x89 && buf[1] === 0x50) ct = 'image/png';
+          let ext = 'png';
+          if (buf[0] === 0xff && buf[1] === 0xd8) { ct = 'image/jpeg'; ext = 'jpg'; }
+          else if (buf[0] === 0x89 && buf[1] === 0x50) { ct = 'image/png'; ext = 'png'; }
+          else if (buf[0] === 0x47 && buf[1] === 0x49) { ct = 'image/gif'; ext = 'gif'; }
+          else if (buf[0] === 0x52 && buf[1] === 0x49 && buf[8] === 0x57) { ct = 'image/webp'; ext = 'webp'; }
+
+          // 落盘：saved-images/序号-摘要.扩展名（失败不影响回传）
+          let savedName = '';
+          if (wantSave) {
+            try {
+              const dir = resolve(process.cwd(), 'saved-images');
+              if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+              const cap = (url.searchParams.get('caption') || '').replace(/[\\/:*?"<>|\s]+/g, '').substring(0, 24);
+              const stamp = new Date().toISOString().replace(/[-:T]/g, '').substring(2, 14);
+              savedName = `${stamp}-${cap || 'image'}.${ext}`;
+              writeFileSync(join(dir, savedName), buf);
+            } catch {}
+          }
 
           res.setHeader('Content-Type', ct);
+          if (savedName) res.setHeader('X-Saved-As', encodeURIComponent(savedName));
           res.end(buf);
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
+      // 打开本地图片文件夹（资源管理器）
+      server.middlewares.use('/imagifly-proxy/open-folder', async (req, res) => {
+        const dir = resolve(process.cwd(), 'saved-images');
+        try {
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          if (process.platform === 'win32') {
+            spawn('explorer', [dir], { detached: true, stdio: 'ignore' }).unref();
+          } else if (process.platform === 'darwin') {
+            spawn('open', [dir], { detached: true, stdio: 'ignore' }).unref();
+          } else {
+            spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+          }
+          res.statusCode = 200;
+          res.end(JSON.stringify({ ok: true, dir }));
         } catch (e) {
           res.statusCode = 500;
           res.end(JSON.stringify({ error: e.message }));

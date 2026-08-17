@@ -716,6 +716,17 @@ async function generateAllImages(prompts, config) {
           img.status = 'done';
           img.url = url;
           renderGalleryCard(img);
+          // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
+          fetch(`/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`)
+            .then((r) => {
+              const saved = r.headers.get('X-Saved-As');
+              if (saved) {
+                img.savedAs = decodeURIComponent(saved);
+                const cap = document.querySelector(`[data-imgid="${img.id}"] .img-caption`);
+                if (cap) cap.title = `已保存: ${img.savedAs}`;
+              }
+            })
+            .catch(() => {});
         }
       })
       .catch((err) => {
@@ -1567,6 +1578,16 @@ window.closeLightbox = closeLightbox;
 window.sendImageToStitch = sendImageToStitch;
 window.switchView = switchView;
 window.addCompareRowToStitch = addCompareRowToStitch;
+window.openImageFolder = async function () {
+  try {
+    const r = await fetch('/imagifly-proxy/open-folder');
+    const d = await r.json();
+    if (d.ok) toast('已打开 saved-images 文件夹');
+    else toast('打开失败');
+  } catch {
+    toast('打开失败');
+  }
+};
 
 /* ===== 初始化 ===== */
 $('generateBtn').addEventListener('click', generate);
