@@ -303,6 +303,48 @@ body{
   color:#e4e9f0;font-size:13px;line-height:1.7;text-align:center;
 }
 
+/* ===== 导出弹窗 ===== */
+.export-modal{
+  position:fixed;inset:0;z-index:9000;display:flex;align-items:center;justify-content:center;
+  background:rgba(15,23,42,.45);backdrop-filter:blur(3px);
+}
+.export-dialog{
+  width:min(640px,92vw);max-height:86vh;display:flex;flex-direction:column;
+  background:var(--surface);border-radius:14px;box-shadow:var(--shadow-lg);overflow:hidden;
+}
+.export-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:14px 20px;font-size:var(--fs-md);font-weight:700;color:var(--text);
+  border-bottom:1px solid var(--border);
+}
+.export-close{cursor:pointer;color:var(--text-dim);font-size:16px;padding:2px 6px;border-radius:6px}
+.export-close:hover{background:var(--surface2);color:var(--text)}
+.export-body{padding:16px 20px 20px;overflow-y:auto}
+.export-tip{
+  font-size:var(--fs-sm);color:var(--text-dim);line-height:1.7;
+  background:var(--surface2);border-radius:8px;padding:10px 14px;margin-bottom:14px;
+}
+.export-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px}
+.export-btn{
+  display:flex;align-items:center;justify-content:center;padding:11px 10px;
+  font-size:var(--fs-base);font-weight:600;border-radius:9px;
+  border:1px solid var(--border-strong);background:var(--surface);color:var(--text);
+  box-shadow:var(--shadow-sm);cursor:pointer;transition:all .15s;
+}
+.export-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);transform:translateY(-1px)}
+.export-btn:disabled{opacity:.6;cursor:wait}
+.export-btn.main{
+  background:linear-gradient(135deg,var(--accent),#3b82f6);border:none;color:#fff;
+}
+.export-btn.main:hover:not(:disabled){color:#fff;transform:translateY(-1px);box-shadow:0 6px 16px rgba(37,99,235,.35)}
+.export-preview-head{font-size:var(--fs-sm);font-weight:700;color:var(--text-dim);margin-bottom:8px}
+.export-preview{
+  max-height:220px;overflow-y:auto;border:1px dashed var(--border-strong);border-radius:9px;
+  padding:12px 14px;display:flex;flex-direction:column;gap:8px;
+}
+.ep-text{font-size:var(--fs-sm);color:var(--text);line-height:1.7}
+.ep-img{font-size:var(--fs-sm);color:var(--c2);font-weight:600}
+
 /* ===== IMAGE TOGGLE ===== */
 .img-toggle-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 0}
 .img-toggle{display:flex;align-items:center;gap:9px;cursor:pointer;user-select:none}

@@ -170,6 +170,27 @@
   <div class="lightbox-caption" id="lightboxCaption"></div>
 </div>
 
+<!-- 导出弹窗 -->
+<div class="export-modal" id="exportModal" style="display:none">
+  <div class="export-dialog">
+    <div class="export-head">
+      <span>导出终稿</span>
+      <span class="export-close" onclick="closeExportModal()">✕</span>
+    </div>
+    <div class="export-body">
+      <div class="export-tip">推荐用「富文本」：图片直接内嵌，粘贴到公众号 / 知乎 / Word 图文混排一步到位。</div>
+      <div class="export-actions">
+        <button class="btn export-btn main" id="exportRichBtn" onclick="doExport('rich')">复制富文本（图文）</button>
+        <button class="btn export-btn" id="exportPlainBtn" onclick="doExport('plain')">复制纯文本（图占位）</button>
+        <button class="btn export-btn" id="exportMdBtn" onclick="doExport('md')">复制 Markdown</button>
+        <button class="btn export-btn" id="exportHtmlBtn" onclick="doExport('html')">下载 HTML</button>
+      </div>
+      <div class="export-preview-head">预览</div>
+      <div class="export-preview" id="exportPreview"></div>
+    </div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script type="module" src="./main.js"></script>
 </body>

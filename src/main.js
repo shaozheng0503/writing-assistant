@@ -1363,28 +1363,183 @@ function loadStitch() {
   } catch {}
 }
 
-/* ===== 导出（文字+图片位置标记） ===== */
-function exportText() {
-  if (state.stitch.length === 0) { toast('拼接区为空'); return; }
-  const parts = state.stitch.map((s) => {
+/* ===== 导出（多格式：富文本图文 / 纯文本 / Markdown / HTML 下载） ===== */
+
+/** 拼接区 → 导出物料。图片统一经同源代理取回转 dataURL（内嵌后粘贴到任何平台都是真图） */
+async function buildExportPayload() {
+  const items = [];
+  for (const s of state.stitch) {
     if (s.type === 'image') {
-      return `[图片: ${s.caption || s.prompt || ''}]`;
+      let dataUrl = '';
+      if (s.url) {
+        try {
+          const r = await fetch(`/imagifly-proxy/image?url=${encodeURIComponent(s.url)}`);
+          if (r.ok) {
+            const blob = await r.blob();
+            dataUrl = await new Promise((resolve) => {
+              const fr = new FileReader();
+              fr.onload = () => resolve(fr.result);
+              fr.onerror = () => resolve('');
+              fr.readAsDataURL(blob);
+            });
+          }
+        } catch {}
+      }
+      items.push({ type: 'image', caption: s.caption || '', dataUrl, src: s.url });
+    } else {
+      items.push({ type: 'text', text: s.text });
     }
-    return s.text;
-  });
-  const text = parts.join('\n\n');
-  copyToClipboard(text)
-    .then(() => toast('已复制到剪贴板'))
-    .catch(() => {
-      const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+  }
+  return items;
+}
+
+/** 物料 → 三种格式的字符串 */
+function payloadToPlain(items) {
+  return items
+    .map((it) => (it.type === 'image' ? `[图片: ${it.caption || '配图'}]` : it.text))
+    .join('\n\n');
+}
+function payloadToMarkdown(items) {
+  return items
+    .map((it) => {
+      if (it.type === 'image') {
+        const alt = (it.caption || '配图').replace(/[[\]]/g, ' ');
+        return `![${alt}](${it.src || ''})`;
+      }
+      return it.text;
+    })
+    .join('\n\n');
+}
+function payloadToHtml(items) {
+  const body = items
+    .map((it) => {
+      if (it.type === 'image') {
+        const cap = escapeHtml(it.caption || '');
+        const src = it.dataUrl || it.src || '';
+        return `<figure><img src="${src}" alt="${cap}" /><figcaption>${cap}</figcaption></figure>`;
+      }
+      return `<p>${escapeHtml(it.text).replace(/\n/g, '<br>')}</p>`;
+    })
+    .join('\n');
+  return `<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>导出终稿</title>
+<style>
+  body { max-width: 720px; margin: 40px auto; padding: 0 20px;
+    font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 16px; line-height: 1.9; color: #1f2733; }
+  p { margin: 0 0 1.2em; }
+  figure { margin: 1.6em 0; text-align: center; }
+  figure img { max-width: 100%; border-radius: 8px; }
+  figcaption { font-size: 13px; color: #5a6678; margin-top: 8px; }
+</style>
+</head>
+<body>
+${body}
+</body>
+</html>`;
+}
+
+/** 写剪贴板：文本 + 可选富文本（text/html）。富文本失败自动降级纯文本 */
+async function copyWithHtml(text, html) {
+  if (navigator.clipboard && window.isSecureContext && window.ClipboardItem && html) {
+    try {
+      await navigator.clipboard.write([
+        new ClipboardItem({
+          'text/plain': new Blob([text], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ]);
+      return 'rich';
+    } catch {}
+  }
+  // 降级：老式 execCommand
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.style.position = 'fixed';
+  ta.style.opacity = '0';
+  document.body.appendChild(ta);
+  ta.select();
+  let ok = false;
+  try { ok = document.execCommand('copy'); } catch {}
+  document.body.removeChild(ta);
+  return ok ? 'plain-fallback' : 'failed';
+}
+
+function openExportModal() {
+  if (state.stitch.length === 0) { toast('拼接区为空，先双击段落或拖入图片'); return; }
+  const modal = $('exportModal');
+  const preview = $('exportPreview');
+  // 预览：轻量 DOM（图片用 src 占位，导出时才真正取图转 dataURL）
+  preview.innerHTML = state.stitch
+    .map((s) =>
+      s.type === 'image'
+        ? `<div class="ep-img">🖼 ${escapeHtml(s.caption || '配图')}</div>`
+        : `<div class="ep-text">${escapeHtml(s.text.substring(0, 120))}${s.text.length > 120 ? '…' : ''}</div>`
+    )
+    .join('');
+  modal.style.display = 'flex';
+}
+function closeExportModal() {
+  $('exportModal').style.display = 'none';
+}
+
+async function doExport(kind) {
+  const btns = { rich: $('exportRichBtn'), plain: $('exportPlainBtn'), md: $('exportMdBtn'), html: $('exportHtmlBtn') };
+  const btn = btns[kind];
+  if (!btn) return;
+  const oldText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '准备中…';
+  try {
+    if (kind === 'html') {
+      btn.textContent = '打包中…';
+      const items = await buildExportPayload();
+      const html = payloadToHtml(items);
+      const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'final_text.txt';
+      a.download = `终稿_${new Date().toISOString().slice(0, 10)}.html`;
       a.click();
       URL.revokeObjectURL(url);
-      toast('已下载文件');
-    });
+      toast('HTML 已下载（图片内嵌，可直接打开/转发）');
+      return;
+    }
+    if (kind === 'rich') {
+      btn.textContent = '正在内嵌图片…';
+      const items = await buildExportPayload();
+      // 富文本片段：dataURL 图片 + 分段文本，粘贴到公众号/知乎/Word 图文混排
+      const html = items
+        .map((it) =>
+          it.type === 'image'
+            ? `<figure><img src="${it.dataUrl || it.src || ''}" alt="${escapeHtml(it.caption || '')}" /><figcaption>${escapeHtml(it.caption || '')}</figcaption></figure>`
+            : `<p>${escapeHtml(it.text).replace(/\n/g, '<br>')}</p>`
+        )
+        .join('');
+      btn.textContent = '复制中…';
+      const res = await copyWithHtml(payloadToPlain(items), html);
+      if (res === 'failed') throw new Error('复制失败');
+      toast(res === 'rich' ? '已复制富文本，去公众号/Word 里 Ctrl+V 即可' : '已复制（富文本不可用，已降级纯文本）');
+      return;
+    }
+    // plain / md
+    const text = kind === 'md'
+      ? payloadToMarkdown(state.stitch)
+      : payloadToPlain(state.stitch);
+    btn.textContent = '复制中…';
+    const res = await copyWithHtml(text, null);
+    if (res === 'failed') throw new Error('复制失败');
+    toast(kind === 'md' ? '已复制 Markdown' : '已复制纯文本');
+  } catch (err) {
+    toast(`导出失败: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldText;
+  }
 }
 
 /* ===== 载入示例 ===== */
@@ -1405,7 +1560,9 @@ window.saveEdit = saveEdit;
 window.removeItem = removeItem;
 window.deleteStitch = deleteStitch;
 window.clearStitch = clearStitch;
-window.exportText = exportText;
+window.exportText = openExportModal;
+window.closeExportModal = closeExportModal;
+window.doExport = doExport;
 window.closeLightbox = closeLightbox;
 window.sendImageToStitch = sendImageToStitch;
 window.switchView = switchView;
