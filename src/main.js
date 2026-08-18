@@ -390,34 +390,75 @@ async function callLLM(systemPrompt, userText, config, onChunk, onReasoning, onR
 /**
  * 第一步：从原文提取「标准分段」——三个 skill 改写的是同一段原文，
  * 原文的语义分段就是天然的对齐锚点。
- * 返回 [{title, gist}, ...]（3~8 段）
+ *
+ * 精度设计（解决边界偏移/粒度不一致）：
+ * 1. LLM 不直接给边界位置，而是给每段「原文首句引文 anchor」——
+ *    引文必须在原文中逐字存在，程序用 indexOf 定位真实字符偏移，
+ *    边界由程序确定，LLM 只负责语义判断
+ * 2. 粒度与原文自然段落数挂钩（程序先数好空行分段，提示词里给出
+ *    推荐段数区间），避免长文切太粗、短文切太碎
+ * 3. anchor 定位失败（LLM 改写了引文）→ 模糊匹配兜底 → 仍失败丢弃该段
+ * 返回 [{title, gist, anchor, start}, ...]
  */
 async function deriveSections(rawText, config) {
-  const systemPrompt = `你是一个文章结构分析器。用户给你一篇原文，请把它按语义拆分成 3~8 个「标准段落」。
+  // 程序先数自然段，给 LLM 明确的粒度锚
+  const naturalParas = splitParagraphs(rawText);
+  const n = naturalParas.length;
+  const minSecs = Math.max(2, Math.min(8, Math.floor(n / 4)));
+  const maxSecs = Math.max(minSecs, Math.min(8, Math.ceil(n / 2)));
+
+  const systemPrompt = `你是一个文章结构分析器。把用户原文按语义拆分成 ${minSecs}~${maxSecs} 个「标准段落」。
 
 输出格式严格为 JSON 数组，不要输出任何其他内容：
-[{"title":"该段小标题(6~12字)","gist":"该段内容概要(30字内)"}]
+[{"title":"该段小标题(6~12字)","gist":"该段内容概要(30字内)","anchor":"该段第一句的前 10~20 个字，必须逐字摘自原文，不得改写"}]
 
 要求：
-- 按行文逻辑分段（如：引入/背景/展开/案例/转折/收尾），段数依文章长度定，3 到 8 段
-- title 概括该段主题；gist 是该段讲了什么
-- 保持原文的段落顺序
-- 不要输出解释、代码块标记`;
+- 按行文逻辑分段（引入/背景/展开/案例/转折/收尾等）
+- **anchor 是关键**：必须是该段开头第一句的前 10~20 个字，逐字复制原文，一个字都不能改。
+  程序会用它在原文中定位段落边界，改写或概括会导致定位失败
+- 每段的 anchor 必须按原文出现顺序排列，后一段的 anchor 在原文中的位置必须晚于前一段
+- 相邻两段不能来自同一个自然段的中途硬切——如果某个自然段主题完整，整段归入一个标准段
+- title 概括该段主题；gist 说明该段讲了什么`;
 
   try {
     const result = await callLLM(systemPrompt, rawText, { ...config, temperature: 0 }, () => {});
     const text = result.text || '';
     const arr = extractJsonArray(text);
     if (arr && arr.length >= 2) {
-      return arr.map((s) => ({ title: s.title || '', gist: s.gist || '' }));
+      // 用 anchor 在原文定位每段起点；定位失败的段尝试模糊匹配，仍失败则丢弃
+      let cursor = 0; // 保证顺序单调：后一段起点必须晚于前一段
+      const sections = [];
+      for (const s of arr) {
+        const anchor = (s.anchor || '').trim();
+        if (!anchor) continue;
+        let start = rawText.indexOf(anchor, cursor);
+        if (start === -1) {
+          // 模糊兜底：取 anchor 前 8 字再找
+          const prefix = anchor.substring(0, 8);
+          if (prefix.length >= 4) start = rawText.indexOf(prefix, cursor);
+        }
+        if (start === -1 || start < cursor) continue; // 定位失败/乱序 → 丢弃该段
+        sections.push({ title: s.title || '', gist: s.gist || '', anchor, start });
+        cursor = start + anchor.length;
+      }
+      // 首段起点归 0：原文开头必然属于第一段（LLM 的 anchor 可能跳过引入句）
+      if (sections.length >= 2) {
+        if (sections[0].start > 0) sections[0].start = 0;
+        return sections;
+      }
     }
   } catch {}
   // 回退：按原文空行分段
   const paras = splitParagraphs(rawText);
   if (paras.length >= 2) {
-    return paras.slice(0, 8).map((p) => ({ title: p.substring(0, 10), gist: p.substring(0, 30) }));
+    let off = 0;
+    return paras.slice(0, 8).map((p) => {
+      const start = rawText.indexOf(p, off);
+      off = start + p.length;
+      return { title: p.substring(0, 10), gist: p.substring(0, 30), anchor: p.substring(0, 15), start: Math.max(0, start) };
+    });
   }
-  return [{ title: '全文', gist: rawText.substring(0, 30) }];
+  return [{ title: '全文', gist: rawText.substring(0, 30), anchor: rawText.substring(0, 15), start: 0 }];
 }
 
 /**
@@ -427,10 +468,13 @@ async function deriveSections(rawText, config) {
  * 返回 number[]，第 i 项 = 该段落归属的标准段 idx；-1 = 无法归属（新增内容）
  */
 async function alignSkillToSections(sections, skillParas, config) {
-  const sectionList = sections.map((s, i) => `${i}. ${s.title}：${s.gist}`).join('\n');
+  // 每个标准段附上 anchor 原文开头，让对齐器对照原文而非只看摘要猜
+  const sectionList = sections
+    .map((s, i) => `${i}. ${s.title}：${s.gist}\n   原文开头：…${(s.anchor || '').substring(0, 20)}…`)
+    .join('\n');
   const paraList = skillParas.map((p, i) => `${i}. ${p.substring(0, 120)}`).join('\n');
 
-  const systemPrompt = `你是一个段落对齐器。有一份「标准分段」（从原文提取）和一份「改写稿的段落列表」（某个改写技能的输出，已按空行拆分并编号）。
+  const systemPrompt = `你是一个段落对齐器。有一份「标准分段」（从原文提取，含每段的原文开头引文）和一份「改写稿的段落列表」（某个改写技能的输出，已按空行拆分并编号）。
 
 标准分段：
 ${sectionList}
@@ -438,14 +482,15 @@ ${sectionList}
 改写稿段落：
 ${paraList}
 
-请判断：改写稿的每个段落分别对应当文中的哪个标准段（按内容对应，改写可能合并/拆分/调序/增删，请按主要内容判断归属）。
+请判断：改写稿的每个段落分别对应当文中的哪个标准段。判断依据：改写稿段落的内容能与哪个标准段的「原文开头/概要」对应上（改写可能合并/拆分/调序/增删，按段落的主要内容判断归属）。
 
 输出格式严格为 JSON 数字数组，长度必须等于改写稿段落数，不要输出任何其他内容：
 [段0对应的标准段编号, 段1对应的编号, ...]
 
 规则：
 - 每项是 0 到 ${sections.length - 1} 的整数
-- 若某段是改写稿新增的内容（原文没有对应部分），填 -1
+- 若某段是改写稿新增的内容（原文没有对应部分，如结尾总结/观点延伸），填 -1
+- 逐个数清楚，输出的数组长度必须与改写稿段落数一致
 - 不要输出解释`;
 
   try {
@@ -493,7 +538,19 @@ async function buildCompare(config) {
         paras.length > 0 ? await alignSkillToSections(sections, paras, fastConfig) : [];
     }
     state.compare = { sections, assigns };
-    $('statusText').textContent = `${prevStatus} · 分段对比就绪，点击顶栏「分段对比」查看`;
+    // 重渲染三列：卡片按标准段着色 + 列头加当前段指示 + 绑定同步滚动
+    ['human-writing', 'humanizer-zh', 'ljg-plain'].forEach((s) => {
+      renderColumnCards(s);
+      const head = $('col-' + s).previousElementSibling;
+      if (head && !head.querySelector('.sec-hint')) {
+        const hint = document.createElement('div');
+        hint.className = 'sec-hint';
+        hint.id = 'secHint-' + s;
+        head.appendChild(hint);
+      }
+    });
+    bindSyncScroll();
+    $('statusText').textContent = `${prevStatus} · 分段对比就绪（三列已同步联动）`;
     toast('分段对比已就绪');
   } catch (err) {
     console.error('分段对比构建失败:', err);
@@ -511,6 +568,98 @@ function switchView(mode) {
   state.viewMode = mode;
   updateCompareUI();
 }
+
+/* ===== 三列同步滚动（自由视图，基于分段对齐映射） ===== */
+/**
+ * 滚动任一列 → 由该列当前顶部可见段落反查所属标准段 → 其余两列滚到
+ * 该标准段的首张卡片。双向联动：任一列都能作为驱动方。
+ * - 仅在 compare 数据就绪 + 自由视图下生效
+ * - syncLock 防级联触发（程序滚动也会触发 scroll 事件）
+ * - 用户滚到底部时驱动其余列也到底部（阅读长段时的自然预期）
+ */
+const syncScroll = { locked: false, raf: null };
+
+function bindSyncScroll() {
+  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  skills.forEach((skill) => {
+    const el = $('col-' + skill);
+    if (!el || el.dataset.syncBound) return;
+    el.dataset.syncBound = '1';
+    el.addEventListener('scroll', () => {
+      if (syncScroll.locked || state.viewMode !== 'free' || !state.compare) return;
+      syncScroll.locked = true;
+      if (syncScroll.raf) cancelAnimationFrame(syncScroll.raf);
+      syncScroll.raf = requestAnimationFrame(() => driveSyncScroll(skill));
+    });
+  });
+}
+
+/** 以 skill 列的当前视口为驱动，同步其余两列 */
+function driveSyncScroll(sourceSkill) {
+  try {
+    const { assigns } = state.compare;
+    const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+    const srcEl = $('col-' + sourceSkill);
+    const srcAssign = assigns[sourceSkill] || [];
+
+    // 到底/接近底部 → 其余列也到底
+    const atBottom = srcEl.scrollTop + srcEl.clientHeight >= srcEl.scrollHeight - 30;
+    if (atBottom) {
+      skills.forEach((sk) => {
+        if (sk !== sourceSkill) {
+          const el = $('col-' + sk);
+          if (el) el.scrollTop = el.scrollHeight;
+        }
+      });
+      updateSectionIndicator(sourceSkill, srcAssign.length - 1);
+      return;
+    }
+
+    // 找当前顶部可见的源列段落（视口顶部 + 少量偏移内第一张卡）
+    const cards = Array.from(srcEl.querySelectorAll('.para-card'));
+    const probe = srcEl.scrollTop + 40;
+    let visIdx = 0;
+    for (const c of cards) {
+      if (c.offsetTop <= probe) visIdx = parseInt(c.dataset.pidx);
+      else break;
+    }
+    const secIdx = srcAssign[visIdx];
+    updateSectionIndicator(sourceSkill, visIdx);
+
+    if (secIdx == null || secIdx < 0) return; // 新增内容段：无对齐目标，不驱动
+    // 其余列滚到该标准段的首张卡片
+    skills.forEach((sk) => {
+      if (sk === sourceSkill) return;
+      const el = $('col-' + sk);
+      if (!el) return;
+      const a = assigns[sk] || [];
+      const firstPi = a.findIndex((t) => t === secIdx);
+      if (firstPi < 0) return; // 该列此段无对应
+      const target = el.querySelector(`.para-card[data-pidx="${firstPi}"]`);
+      if (target) el.scrollTop = target.offsetTop - 8;
+    });
+  } finally {
+    // 程序滚动触发其余列的 scroll 事件 → locked 挡住；稍后解锁
+    setTimeout(() => { syncScroll.locked = false; }, 80);
+  }
+}
+
+/** 列头当前段指示：更新列头下的「第 X/Y 段 · 标题」 */
+function updateSectionIndicator(skill, paraIdx) {
+  const hint = $('secHint-' + skill);
+  if (!hint || !state.compare) return;
+  const { sections, assigns } = state.compare;
+  const secIdx = (assigns[skill] || [])[paraIdx];
+  if (secIdx == null || secIdx < 0) {
+    hint.textContent = '✦ 新增内容';
+    hint.style.color = 'var(--c3)';
+  } else {
+    const total = sections.length;
+    hint.textContent = `§${secIdx + 1}/${total} ${sections[secIdx].title}`;
+    hint.style.color = SECTION_COLORS[secIdx % SECTION_COLORS.length];
+  }
+}
+
 function updateCompareUI() {
   const compareBtn = $('viewCompareBtn');
   const freeBtn = $('viewFreeBtn');
@@ -1018,6 +1167,9 @@ async function generateColumn(skill, rawText, config) {
 }
 
 /* ===== 渲染段落卡片 ===== */
+/** 分段配色盘：同一标准段在三列中用同色左边框，直观呈现对齐关系 */
+const SECTION_COLORS = ['#2563eb', '#0d9668', '#d97706', '#7c3aed', '#0891b2', '#dc2626', '#65a30d', '#c026d3'];
+
 function renderColumnCards(skill) {
   const container = $('col-' + skill);
   const paras = state.paragraphs[skill];
@@ -1025,12 +1177,20 @@ function renderColumnCards(skill) {
     container.innerHTML = '<div class="error-text">无内容</div>';
     return;
   }
+  const assigns = state.compare ? state.compare.assigns[skill] : null;
   container.innerHTML = paras
     .map((p, i) => {
       const pid = `${skill}::${i}`;
       const isSel = state.selectedPicks.has(pid);
-      return `<div class="para-card ${isSel ? 'selected' : ''}" data-pid="${pid}">
-        <span class="pnum">${i + 1}</span>
+      // 有对齐数据时：卡片按所属标准段着色 + 显示段号
+      const sec = assigns ? assigns[i] : null;
+      const secStyle =
+        sec != null && sec >= 0
+          ? ` style="border-left:3px solid ${SECTION_COLORS[sec % SECTION_COLORS.length]}"`
+          : ' style="border-left:3px dashed var(--border-strong)"';
+      const secBadge = assigns ? (sec >= 0 ? `<span class="sec-badge" style="background:${SECTION_COLORS[sec % SECTION_COLORS.length]}">${sec + 1}</span>` : '<span class="sec-badge sec-badge-new">✦</span>') : '';
+      return `<div class="para-card ${isSel ? 'selected' : ''}" data-pid="${pid}" data-pidx="${i}"${secStyle}>
+        <span class="pnum">${i + 1}</span>${secBadge}
         <p>${escapeHtml(p)}</p>
         <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
         <span class="pick-hint">双击收入拼接区</span>
