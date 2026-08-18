@@ -262,6 +262,11 @@
       <button class="btn btn-sm view-btn active" id="viewFreeBtn" onclick="switchView('free')">自由视图</button>
       <button class="btn btn-sm view-btn" id="viewCompareBtn" onclick="switchView('compare')">分段对比</button>
     </div>
+    <div class="fs-ctrl" id="fsCtrl" title="阅读字号（仅影响结果页排版，本地记忆）">
+      <button class="fs-btn" id="fsDown" onclick="adjustReadingFs(-1)" title="减小字号">A−</button>
+      <span class="fs-val" id="fsVal">15</span>
+      <button class="fs-btn" id="fsUp" onclick="adjustReadingFs(1)" title="增大字号">A＋</button>
+    </div>
     <span class="status" id="statusText"></span>
   </div>
 

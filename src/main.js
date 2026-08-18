@@ -189,6 +189,29 @@ function toggleTheme() {
 }
 applyTheme(localStorage.getItem('ww_theme') || 'light');
 
+/* ===== 阅读字号调节（结果页 A-/A+） ===== */
+const READING_FS_STEPS = [14, 15, 16, 17, 18];
+function getReadingFs() {
+  const v = parseInt(localStorage.getItem('ww_reading_fs') || '15', 10);
+  return READING_FS_STEPS.includes(v) ? v : 15;
+}
+function applyReadingFs() {
+  const fs = getReadingFs();
+  const pageEl = $('page-result');
+  if (pageEl) pageEl.style.setProperty('--reading-fs', fs + 'px');
+  const val = $('fsVal'); const down = $('fsDown'); const up = $('fsUp');
+  if (val) val.textContent = fs;
+  if (down) down.disabled = fs <= READING_FS_STEPS[0];
+  if (up) up.disabled = fs >= READING_FS_STEPS[READING_FS_STEPS.length - 1];
+}
+function adjustReadingFs(delta) {
+  const idx = READING_FS_STEPS.indexOf(getReadingFs());
+  const next = READING_FS_STEPS[Math.min(READING_FS_STEPS.length - 1, Math.max(0, idx + delta))];
+  localStorage.setItem('ww_reading_fs', String(next));
+  applyReadingFs();
+}
+applyReadingFs();
+
 /* ===== 页面切换 ===== */
 function showInputPage() {
   $('page-input').style.display = 'flex';
@@ -829,7 +852,7 @@ function renderCompare() {
         })
         .join('');
       return `<div class="cmp-row">
-        <div class="cmp-sec">
+        <div class="cmp-sec" style="border-left:3px solid ${SECTION_COLORS[si % SECTION_COLORS.length]}">
           <div class="cmp-sec-title">${si + 1}. ${escapeHtml(sec.title)}</div>
           <div class="cmp-sec-gist">${escapeHtml(sec.gist)}</div>
           <button class="btn btn-mini cmp-row-btn" onclick="addCompareRowToStitch(${si})" title="把此段中选中的（或全部）卡片收入拼接区">整行收入</button>
@@ -2017,8 +2040,9 @@ async function regenerateColumn(skill) {
 function togglePick(pid) {
   if (state.selectedPicks.has(pid)) state.selectedPicks.delete(pid);
   else state.selectedPicks.add(pid);
-  const el = document.querySelector(`.para-card[data-pid="${pid}"]`);
-  if (el) el.classList.toggle('selected');
+  // 同一 pid 在自由视图与对比视图各有一张卡片，选中态要同步到所有副本
+  const sel = state.selectedPicks.has(pid);
+  document.querySelectorAll(`.para-card[data-pid="${pid}"]`).forEach((el) => el.classList.toggle('selected', sel));
 }
 function pickAll(skill) {
   const paras = state.paragraphs[skill] || [];
@@ -2028,8 +2052,7 @@ function pickAll(skill) {
     const pid = `${skill}::${i}`;
     if (allSel) state.selectedPicks.delete(pid);
     else state.selectedPicks.add(pid);
-    const el = document.querySelector(`.para-card[data-pid="${pid}"]`);
-    if (el) el.classList.toggle('selected', !allSel);
+    document.querySelectorAll(`.para-card[data-pid="${pid}"]`).forEach((el) => el.classList.toggle('selected', !allSel));
   });
   toast(allSel ? '已取消全选' : '已全选');
 }
@@ -2553,6 +2576,7 @@ window.openImageFolder = async function () {
   }
 };
 window.toggleTheme = toggleTheme;
+window.adjustReadingFs = adjustReadingFs;
 window.openSkillForm = openSkillForm;
 window.editCustomSkillForm = editCustomSkillForm;
 window.submitSkillForm = submitSkillForm;
