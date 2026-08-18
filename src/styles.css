@@ -293,6 +293,9 @@ body{
 }
 .img-card:hover .img-drag-hint{opacity:.9}
 
+/* 键盘导航聚焦态：比 hover 更明确的 accent 描边（不与 selected 冲突） */
+.para-card.kb-focused{border-color:var(--accent);box-shadow:0 0 0 2px var(--accent),var(--shadow-md)}
+
 /* ===== STITCH AREA ===== */
 /* 终稿卡片：与技能卡片同语言，左侧色条标识「已收入」，排版即终稿所见 */
 .stitch-card{
@@ -345,17 +348,18 @@ body{
 .error-text .err-detail{display:block;margin-top:6px;color:#9f5b5b;font-size:var(--fs-sm);word-break:break-all}
 
 /* ===== REASONING PANEL（思考过程折叠面板） ===== */
+/* 编辑器风：更轻的头部、正文 1.9 行距、与卡片同圆角语言 */
 .reasoning-panel{
   background:var(--reasoning-bg);border:1px solid var(--border);border-left:3px solid var(--c2);
-  border-radius:10px;margin-bottom:11px;overflow:hidden;
+  border-radius:10px;margin-bottom:12px;overflow:hidden;
 }
 .reasoning-header{
-  display:flex;align-items:center;gap:7px;padding:8px 13px;cursor:pointer;
+  display:flex;align-items:center;gap:8px;padding:7px 14px;cursor:pointer;
   font-size:12px;color:var(--text-dim);user-select:none;transition:background .15s;
 }
 .reasoning-header:hover{background:var(--surface2)}
 .reasoning-icon{font-size:13px}
-.reasoning-label{font-weight:600;color:var(--c2)}
+.reasoning-label{font-weight:600;color:var(--c2);letter-spacing:.3px}
 .reasoning-meter{
   font-size:11px;color:var(--text-dim);font-variant-numeric:tabular-nums;
   background:var(--surface3);padding:1px 9px;border-radius:999px;font-weight:500;
@@ -366,9 +370,9 @@ body{
 .reasoning-panel.done .reasoning-meter{color:var(--c2);background:var(--ok-bg)}
 .reasoning-toggle{margin-left:auto;font-size:11px;color:var(--accent);font-weight:600}
 .reasoning-body{
-  padding:10px 15px;font-size:13.5px;line-height:1.85;color:var(--text-dim);
+  padding:12px 16px;font-size:13.5px;line-height:1.9;color:var(--text-dim);
   white-space:pre-wrap;word-break:break-word;max-height:260px;overflow-y:auto;
-  border-top:1px solid var(--border);transition:max-height .2s;letter-spacing:.2px;
+  border-top:1px dashed var(--border-strong);letter-spacing:.2px;
 }
 /* 折叠状态 */
 .reasoning-panel.collapsed .reasoning-body{
@@ -447,12 +451,15 @@ body{
 }
 .export-btn.main:hover:not(:disabled){color:#fff;transform:translateY(-1px);box-shadow:0 6px 16px rgba(37,99,235,.35)}
 .export-preview-head{font-size:var(--fs-sm);font-weight:700;color:var(--text-dim);margin-bottom:8px}
+/* 预览：模拟真实导出排版（跟随阅读字号） */
 .export-preview{
-  max-height:220px;overflow-y:auto;border:1px dashed var(--border-strong);border-radius:9px;
-  padding:12px 14px;display:flex;flex-direction:column;gap:8px;
+  max-height:260px;overflow-y:auto;border:1px solid var(--border);border-radius:9px;
+  padding:16px 18px;display:flex;flex-direction:column;gap:12px;background:var(--surface);
 }
-.ep-text{font-size:var(--fs-sm);color:var(--text);line-height:1.7}
-.ep-img{font-size:var(--fs-sm);color:var(--c2);font-weight:600}
+.ep-p{font-size:var(--ep-fs,15px);line-height:2.0;color:var(--text);letter-spacing:.2px;margin:0}
+.ep-figure{margin:0;text-align:center}
+.ep-figure img{max-width:100%;max-height:180px;border-radius:8px;box-shadow:var(--shadow-sm)}
+.ep-figure figcaption{font-size:var(--fs-xs);color:var(--text-dim);margin-top:6px}
 
 /* ===== IMAGE TOGGLE ===== */
 .img-toggle-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 0}

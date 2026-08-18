@@ -2471,14 +2471,16 @@ function openExportModal() {
   if (state.stitch.length === 0) { toast('拼接区为空，先双击段落或拖入图片'); return; }
   const modal = $('exportModal');
   const preview = $('exportPreview');
-  // 预览：轻量 DOM（图片用 src 占位，导出时才真正取图转 dataURL）
+  // 预览：模拟真实导出排版（图片真实缩略、文本按段落），所见即所得
+  const fs = getReadingFs();
   preview.innerHTML = state.stitch
     .map((s) =>
       s.type === 'image'
-        ? `<div class="ep-img">🖼 ${escapeHtml(s.caption || '配图')}</div>`
-        : `<div class="ep-text">${escapeHtml(s.text.substring(0, 120))}${s.text.length > 120 ? '…' : ''}</div>`
+        ? `<figure class="ep-figure"><img src="${escapeHtml(s.src || '')}" alt="${escapeHtml(s.caption || '配图')}" loading="lazy" /><figcaption>${escapeHtml(s.caption || '配图')}</figcaption></figure>`
+        : `<p class="ep-p">${escapeHtml(s.text.substring(0, 400))}${s.text.length > 400 ? '…' : ''}</p>`
     )
     .join('');
+  preview.style.setProperty('--ep-fs', fs + 'px');
   modal.style.display = 'flex';
 }
 function closeExportModal() {
@@ -2591,6 +2593,69 @@ $('backBtn').addEventListener('click', showInputPage);
 $('saveKeyBtn').addEventListener('click', saveKey);
 $('clearKeyBtn').addEventListener('click', clearKey);
 $('llmProvider').addEventListener('change', updateModelOptions);
+
+/* ===== 卡片键盘导航（结果页 ↑↓ 移动聚焦 / Space 选中 / Enter 收入） ===== */
+/**
+ * 自由视图下按 ↑/↓ 在「当前聚焦列」内逐卡移动（首次按键从第一列第一张开始）；
+ * Space 切换选中（与点击一致，双视图副本同步）；Enter 等价双击收入拼接区。
+ * 输入框/弹窗打开时不拦截；←/→ 可在列间切换。
+ */
+const kbNav = { focused: null };
+function kbVisibleCards() {
+  if (!$('page-result').classList.contains('active')) return [];
+  if (state.viewMode !== 'free') return [];
+  if ($('exportModal').style.display !== 'none' || $('lightbox').style.display !== 'none') return [];
+  return [...document.querySelectorAll('#columnsWrap .col-skill .para-card')]
+    .filter((c) => c.offsetParent !== null);
+}
+function kbFocusCard(card, scroll = true) {
+  if (kbNav.focused === card) return;
+  kbNav.focused?.classList.remove('kb-focused');
+  kbNav.focused = card;
+  card.classList.add('kb-focused');
+  if (scroll) card.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+function kbMove(delta) {
+  const cards = kbVisibleCards();
+  if (cards.length === 0) return false;
+  // 同列分组：↑/↓ 只在当前列内移动，到列首/列尾停住
+  const colEl = kbNav.focused?.closest('.col-skill');
+  const pool = colEl ? cards.filter((c) => c.closest('.col-skill') === colEl) : cards;
+  const list = pool.length ? pool : cards;
+  const idx = kbNav.focused ? list.indexOf(kbNav.focused) : -1;
+  const next = list[Math.min(list.length - 1, Math.max(0, idx + delta))] || list[delta < 0 ? 0 : list.length - 1];
+  if (next) kbFocusCard(next);
+  return true;
+}
+function kbSwitchCol(delta) {
+  const cards = kbVisibleCards();
+  if (cards.length === 0) return false;
+  const cols = [...new Set(cards.map((c) => c.closest('.col-skill')))];
+  const curCol = kbNav.focused?.closest('.col-skill') || cols[0];
+  const ci = cols.indexOf(curCol);
+  const target = cols[Math.min(cols.length - 1, Math.max(0, ci + delta))] || curCol;
+  const first = cards.find((c) => c.closest('.col-skill') === target);
+  if (first) kbFocusCard(first);
+  return true;
+}
+document.addEventListener('keydown', (e) => {
+  // 输入控件内不拦截（编辑卡片 textarea 等）
+  const tag = (e.target.tagName || '').toLowerCase();
+  if (tag === 'textarea' || tag === 'input' || tag === 'select' || e.target.isContentEditable) return;
+  if (e.key === 'ArrowDown') { if (kbMove(1)) e.preventDefault(); return; }
+  if (e.key === 'ArrowUp') { if (kbMove(-1)) e.preventDefault(); return; }
+  if (e.key === 'ArrowRight') { if (kbSwitchCol(1)) e.preventDefault(); return; }
+  if (e.key === 'ArrowLeft') { if (kbSwitchCol(-1)) e.preventDefault(); return; }
+  if ((e.key === ' ' || e.code === 'Space') && kbNav.focused) {
+    e.preventDefault();
+    togglePick(kbNav.focused.dataset.pid);
+    return;
+  }
+  if (e.key === 'Enter' && kbNav.focused) {
+    e.preventDefault();
+    sendToStitch(kbNav.focused.dataset.pid);
+  }
+});
 
 // 快捷键
 document.addEventListener('keydown', (e) => {
