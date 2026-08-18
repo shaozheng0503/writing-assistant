@@ -27,6 +27,12 @@ function check(name, ok, detail = '') {
   await page.goto(URL, { waitUntil: 'networkidle0', timeout: 30000 });
   check('页面无 JS 报错', errors.length === 0, errors.join(' | '));
 
+  // 首页改版后技能管理面板位于「高级设置」折叠面板内，先展开
+  await page.evaluate(() => {
+    const body = document.getElementById('advancedBody');
+    if (body && body.style.display === 'none') document.getElementById('advancedHead').click();
+  });
+  await new Promise((r) => setTimeout(r, 300));
   const panelVisible = await page.evaluate(() => {
     const el = document.getElementById('skillManager');
     return !!el && el.offsetParent !== null;

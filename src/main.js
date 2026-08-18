@@ -109,6 +109,7 @@ const state = {
   generated: { 'human-writing': '', 'humanizer-zh': '', 'ljg-plain': '' },
   paragraphs: { 'human-writing': [], 'humanizer-zh': [], 'ljg-plain': [] },
   selectedPicks: new Set(),
+  hiddenCards: new Set(), // 调试聚焦：被用户隐藏的段落 pid（内存态，重新生成重置）
   images: [],          // {id, status: 'loading'|'done'|'error', prompt, url, caption}
   stitch: [],          // {type:'text', skill, text, editing} | {type:'image', imgId, prompt, url, caption}
   selectedStitchIdx: null,
@@ -679,6 +680,21 @@ function switchView(mode) {
  */
 const syncScroll = { locked: false, raf: null };
 
+/** 同步滚动开关（默认开，可临时关闭自由浏览） */
+function isSyncScrollOn() {
+  return localStorage.getItem('ww_sync_scroll') !== '0';
+}
+function toggleSyncScroll() {
+  const next = isSyncScrollOn() ? '0' : '1';
+  localStorage.setItem('ww_sync_scroll', next);
+  refreshSyncScrollBtn();
+  toast(next === '1' ? '同步滚动已开启' : '同步滚动已关闭');
+}
+function refreshSyncScrollBtn() {
+  const btn = $('syncScrollBtn');
+  if (btn) btn.classList.toggle('sync-off', !isSyncScrollOn());
+}
+
 function bindSyncScroll() {
   const skills = getActiveSkills();
   skills.forEach((skill) => {
@@ -686,7 +702,7 @@ function bindSyncScroll() {
     if (!el || el.dataset.syncBound) return;
     el.dataset.syncBound = '1';
     el.addEventListener('scroll', () => {
-      if (syncScroll.locked || state.viewMode !== 'free' || !state.compare) return;
+      if (syncScroll.locked || state.viewMode !== 'free' || !isSyncScrollOn()) return;
       syncScroll.locked = true;
       if (syncScroll.raf) cancelAnimationFrame(syncScroll.raf);
       syncScroll.raf = requestAnimationFrame(() => driveSyncScroll(skill));
@@ -697,9 +713,24 @@ function bindSyncScroll() {
 /** 以 skill 列的当前视口为驱动，同步其余列 */
 function driveSyncScroll(sourceSkill) {
   try {
-    const { assigns } = state.compare;
     const skills = getActiveSkills();
     const srcEl = $('col-' + sourceSkill);
+
+    // 无 compare 数据（构建失败/未就绪）→ 像素级等比例同步兜底
+    if (!state.compare) {
+      const srcMax = srcEl.scrollHeight - srcEl.clientHeight;
+      const ratio = srcMax > 0 ? srcEl.scrollTop / srcMax : 0;
+      skills.forEach((sk) => {
+        if (sk === sourceSkill) return;
+        const el = $('col-' + sk);
+        if (!el) return;
+        const max = el.scrollHeight - el.clientHeight;
+        el.scrollTop = max > 0 ? ratio * max : 0;
+      });
+      return;
+    }
+
+    const { assigns } = state.compare;
     const srcAssign = assigns[sourceSkill] || [];
 
     // 到底/接近底部 → 其余列也到底
@@ -793,7 +824,10 @@ function renderColumns() {
   // 删掉旧技能列（data-skill 标记；配图库/拼接区不带该标记，保持不动）
   wrap.querySelectorAll('.col[data-skill]').forEach((el) => el.remove());
   const stitchColEl = wrap.querySelector('.col-stitch');
-  const skills = getActiveSkills();
+  let skills = getActiveSkills();
+  // 用户自定义列顺序（拖拽持久化）：有效顺序在前，新增技能跟在后面
+  const savedOrder = JSON.parse(localStorage.getItem('ww_col_order') || '[]').filter((s) => skills.includes(s));
+  skills = [...savedOrder, ...skills.filter((s) => !savedOrder.includes(s))];
   const frag = document.createDocumentFragment();
   for (const skill of skills) {
     const meta = getSkillMeta(skill);
@@ -801,18 +835,80 @@ function renderColumns() {
     col.className = 'col col-skill';
     col.dataset.skill = skill;
     col.innerHTML = `
-      <div class="col-head" style="border-top:3px solid ${meta.color}">
+      <div class="col-head" style="border-top:3px solid ${meta.color}" draggable="true" title="拖拽列头可调整列顺序">
         <span class="col-dot" style="background:${meta.color}"></span>
+        <span class="drag-grip" title="拖拽调整列顺序">⠿</span>
         <span>${escapeHtml(meta.label)}</span>
         <span class="skill-desc">${escapeHtml(meta.author || meta.desc || '')}</span>
         <button class="btn btn-mini" onclick="addSelectedToStitch('${skill}')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
         <button class="btn btn-mini btn-regen" onclick="regenerateColumn('${skill}')" title="重新生成此列">↻</button>
         <button class="btn btn-mini" onclick="pickAll('${skill}')">全选</button>
+        <button class="btn btn-mini" id="hiddenCount-${skill}" onclick="unhideAllCards('${skill}')" style="display:none" title="点击恢复显示本列全部已隐藏段落"></button>
       </div>
       <div class="col-body" id="col-${skill}"></div>`;
     frag.appendChild(col);
   }
   wrap.insertBefore(frag, stitchColEl);
+  bindColumnDrag();
+}
+
+/* ===== 列拖拽排序 ===== */
+/**
+ * 拖列头移动整列位置。HTML5 DnD：
+ * - dragstart：记录源列，加 dragging 样式
+ * - dragover（在列头上）：计算落点是左半/右半 → 目标列加 left/right 指示线
+ * - drop：按指示把源列 DOM 移到目标列前/后，写 localStorage，重绑同步滚动
+ * 配图库/拼接区不参与（只允许 col-skill 之间）。
+ */
+function bindColumnDrag() {
+  const wrap = $('columnsWrap');
+  let dragSrc = null;
+  wrap.querySelectorAll('.col-skill > .col-head').forEach((head) => {
+    head.addEventListener('dragstart', (e) => {
+      dragSrc = head.parentElement;
+      e.dataTransfer.effectAllowed = 'move';
+      e.dataTransfer.setData('text/plain', ''); // 兼容 Firefox
+      requestAnimationFrame(() => dragSrc?.classList.add('col-dragging'));
+    });
+    head.addEventListener('dragend', () => {
+      dragSrc?.classList.remove('col-dragging');
+      dragSrc = null;
+      wrap.querySelectorAll('.drop-marker').forEach((el) => el.classList.remove('drop-left', 'drop-right'));
+    });
+    head.addEventListener('dragover', (e) => {
+      if (!dragSrc) return;
+      const targetCol = head.parentElement;
+      if (!targetCol.classList.contains('col-skill') || targetCol === dragSrc) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      // 鼠标在目标列头左半 → 插到它前面；右半 → 后面
+      const rect = head.getBoundingClientRect();
+      const isLeft = e.clientX < rect.left + rect.width / 2;
+      head.classList.add('drop-marker', isLeft ? 'drop-left' : 'drop-right');
+      head.classList.remove(isLeft ? 'drop-right' : 'drop-left');
+    });
+    head.addEventListener('dragleave', () => {
+      head.classList.remove('drop-left', 'drop-right');
+    });
+    head.addEventListener('drop', (e) => {
+      if (!dragSrc) return;
+      const targetCol = head.parentElement;
+      e.preventDefault();
+      const rect = head.getBoundingClientRect();
+      const isLeft = e.clientX < rect.left + rect.width / 2;
+      head.classList.remove('drop-left', 'drop-right');
+      if (targetCol === dragSrc) return;
+      // DOM 重排
+      if (isLeft) wrap.insertBefore(dragSrc, targetCol);
+      else wrap.insertBefore(dragSrc, targetCol.nextElementSibling);
+      // 持久化当前顺序
+      const order = [...wrap.querySelectorAll('.col-skill')].map((c) => c.dataset.skill);
+      localStorage.setItem('ww_col_order', JSON.stringify(order));
+      // 同步滚动绑定在新 DOM 上重建（col-body 元素没变，绑定仍在；保险起见重绑一次新的）
+      bindSyncScroll();
+      toast('列顺序已调整');
+    });
+  });
 }
 
 /** 渲染分段对比视图：每个标准段一行，各 skill 横向并排 */
@@ -1559,24 +1655,40 @@ async function generateImageViaCustomApi(prompt) {
   return urls;
 }
 
-/** Imagifly 内置代理流程：submit → 轮询 → 全部图片 URL */
+/** Imagifly 内置代理流程：submit → 轮询 → 全部图片 URL（429/限流自动退避重试） */
 async function generateImageViaImagifly(prompt) {
-  const submitRes = await fetch('/imagifly-proxy/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      prompt,
-      model: getImageModel(), // 用户可配置，未配置回退 nano-banana-2
-      size: getImageSize(),   // 用户可配置（16:9 / 1:1 / 9:16）
-      imageCount: getImageCount(), // 用户可配置（1~3 张/画面）
-    }),
-  });
-  if (!submitRes.ok) {
-    const err = await submitRes.json().catch(() => ({ error: '提交失败' }));
-    throw new Error(`提交生图失败: ${err.error || err.detail || '未知'}`);
+  const MAX_SUBMIT_ATTEMPTS = 3;
+  let gid = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < MAX_SUBMIT_ATTEMPTS; attempt++) {
+    try {
+      const submitRes = await fetch('/imagifly-proxy/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          prompt,
+          model: getImageModel(), // 用户可配置，未配置回退 nano-banana-2
+          size: getImageSize(),   // 用户可配置（16:9 / 1:1 / 9:16）
+          imageCount: getImageCount(), // 用户可配置（1~3 张/画面）
+        }),
+      });
+      if (!submitRes.ok) {
+        const err = await submitRes.json().catch(() => ({ error: '提交失败' }));
+        throw new Error(`提交生图失败: ${err.error || err.detail || '未知'}`);
+      }
+      const data = await submitRes.json();
+      if (!data.gid) throw new Error('未获取到 generation id');
+      gid = data.gid;
+      break;
+    } catch (e) {
+      lastErr = e;
+      // 限流/服务端错误/网络抖动 → 指数退避后重试（15s / 30s）
+      if (attempt < MAX_SUBMIT_ATTEMPTS - 1) {
+        await new Promise((r) => setTimeout(r, 15000 * (attempt + 1)));
+      }
+    }
   }
-  const { gid } = await submitRes.json();
-  if (!gid) throw new Error('未获取到 generation id');
+  if (!gid) throw lastErr || new Error('提交生图失败（已重试）');
 
   const MAX_POLLS = 40;
   for (let i = 0; i < MAX_POLLS; i++) {
@@ -1595,6 +1707,21 @@ async function generateImageViaImagifly(prompt) {
       continue; // success 但没 URL（数据异常）→ 继续轮询几轮
     }
     if (pollData.status === 'failed') {
+      const isRateLimit = /rate|limit|429|too many/i.test(pollData.error || '');
+      if (isRateLimit) {
+        // 限流类失败：等 20s 释放窗口，重新提交一次（拿新 gid）
+        await new Promise((r) => setTimeout(r, 20000));
+        const retryRes = await fetch('/imagifly-proxy/submit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ prompt, model: getImageModel(), size: getImageSize(), imageCount: getImageCount() }),
+        }).catch(() => null);
+        if (retryRes && retryRes.ok) {
+          const d = await retryRes.json().catch(() => null);
+          if (d?.gid) gid = d.gid; // 换新 gid 继续当前轮询循环
+          continue;
+        }
+      }
       throw new Error(`生成失败: ${pollData.error || '未知'}`);
     }
   }
@@ -1658,10 +1785,11 @@ async function generateAllImages(prompts, config) {
               })
               .catch(() => {});
           } else if (img && !url) {
-            // 服务器只返回了部分图片
-            img.status = 'error';
-            img.error = '本张未返回（张数不足）';
-            renderGalleryCard(img);
+            // 服务器只返回了部分图片：未返回的卡不标记为「失败」，
+            // 移除占位卡（避免大量红卡误导「生成失败」）；有至少 1 张即算该画面成功
+            img.status = 'skipped';
+            const card = document.querySelector(`[data-imgid="${img.id}"]`);
+            if (card) card.remove();
           }
         }
       })
@@ -1905,6 +2033,7 @@ function renderColumnCards(skill) {
     .map((p, i) => {
       const pid = `${skill}::${i}`;
       const isSel = state.selectedPicks.has(pid);
+      const isHidden = state.hiddenCards.has(pid); // 调试聚焦：已隐藏的段落
       // 有对齐数据时：卡片按所属标准段着色 + 显示段号
       const sec = assigns ? assigns[i] : null;
       const secStyle =
@@ -1912,18 +2041,51 @@ function renderColumnCards(skill) {
           ? ` style="border-left:3px solid ${SECTION_COLORS[sec % SECTION_COLORS.length]}"`
           : ' style="border-left:3px dashed var(--border-strong)"';
       const secBadge = assigns ? (sec >= 0 ? `<span class="sec-badge" style="background:${SECTION_COLORS[sec % SECTION_COLORS.length]}">${sec + 1}</span>` : '<span class="sec-badge sec-badge-new">✦</span>') : '';
+      if (isHidden) {
+        return `<div class="para-card para-hidden-stub ${isSel ? 'selected' : ''}" data-pid="${pid}" data-pidx="${i}"${secStyle}
+          onclick="toggleCardHidden('${pid}')" title="段落已隐藏（调试聚焦），点击恢复显示">
+          <span class="pnum">${i + 1}</span>${secBadge}
+          <span class="stub-text">段落 ${i + 1} 已隐藏 · 点击恢复</span>
+        </div>`;
+      }
       return `<div class="para-card ${isSel ? 'selected' : ''}" data-pid="${pid}" data-pidx="${i}"${secStyle}>
         <span class="pnum">${i + 1}</span>${secBadge}
         <p>${escapeHtml(p)}</p>
         <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
+        <span class="hide-btn" onclick="event.stopPropagation();toggleCardHidden('${pid}')" title="隐藏此段落（调试聚焦）">隐</span>
         <span class="pick-hint">双击收入拼接区</span>
       </div>`;
     })
     .join('');
-  container.querySelectorAll('.para-card').forEach((card) => {
+  container.querySelectorAll('.para-card:not(.para-hidden-stub)').forEach((card) => {
     card.addEventListener('click', () => togglePick(card.dataset.pid));
     card.addEventListener('dblclick', () => sendToStitch(card.dataset.pid));
   });
+  updateHiddenCount(skill);
+}
+
+/* ===== 段落显隐（调试聚焦） ===== */
+/** 隐藏/恢复某个段落（内存态，重新生成时重置） */
+function toggleCardHidden(pid) {
+  if (state.hiddenCards.has(pid)) state.hiddenCards.delete(pid);
+  else state.hiddenCards.add(pid);
+  const skill = pid.split('::')[0];
+  renderColumnCards(skill); // 重建该列（stub 或正常卡）
+}
+/** 恢复某列全部隐藏段落 */
+function unhideAllCards(skill) {
+  [...state.hiddenCards].forEach((pid) => {
+    if (pid.startsWith(skill + '::')) state.hiddenCards.delete(pid);
+  });
+  renderColumnCards(skill);
+}
+/** 列头「已隐藏 n」徽标 */
+function updateHiddenCount(skill) {
+  const btn = $('hiddenCount-' + skill);
+  if (!btn) return;
+  const n = [...state.hiddenCards].filter((pid) => pid.startsWith(skill + '::')).length;
+  btn.style.display = n > 0 ? '' : 'none';
+  btn.textContent = `已隐藏 ${n} · 恢复`;
 }
 
 /* ===== 生成三版 ===== */
@@ -1958,6 +2120,7 @@ async function generate() {
   $('col-gallery').innerHTML = '';
 
   state.selectedPicks.clear();
+  state.hiddenCards.clear();
   state.compare = null;        // 重置分段对比
   state.viewMode = 'free';     // 回到自由视图
   updateCompareUI();
@@ -1990,10 +2153,12 @@ async function generate() {
     await imgPromise;
   }
 
+  // skipped = 服务器没出满张数的占位卡（已移除显示），不计入分母避免「3/6」误导
   const imgOk = state.images.filter((i) => i.status === 'done').length;
+  const imgTotal = state.images.filter((i) => i.status !== 'skipped').length;
   if (okCount === totalSkills) {
     $('statusText').textContent = imgEnabled
-      ? `生成完成 · 文字 ${okCount}/${totalSkills} + 配图 ${imgOk}/${state.images.length}`
+      ? `生成完成 · 文字 ${okCount}/${totalSkills} + 配图 ${imgOk}/${imgTotal}`
       : '生成完成 · 双击段落收入拼接区';
     toast(imgEnabled ? `${totalSkills} 版文字 + ${imgOk} 张配图已生成` : `${totalSkills} 版已生成`);
     // 构建分段对比（原文标准分段 + 各列映射），不阻塞主流程
@@ -2579,6 +2744,9 @@ window.openImageFolder = async function () {
 };
 window.toggleTheme = toggleTheme;
 window.adjustReadingFs = adjustReadingFs;
+window.toggleCardHidden = toggleCardHidden;
+window.unhideAllCards = unhideAllCards;
+window.toggleSyncScroll = toggleSyncScroll;
 window.openSkillForm = openSkillForm;
 window.editCustomSkillForm = editCustomSkillForm;
 window.submitSkillForm = submitSkillForm;
@@ -2675,6 +2843,7 @@ document.addEventListener('keydown', (e) => {
 updateModelOptions();
 loadKey();
 checkSavedStitch();
+refreshSyncScrollBtn();
 
 // 技能管理面板：初始渲染 + 折叠交互 + 面板计数
 renderSkillManager();

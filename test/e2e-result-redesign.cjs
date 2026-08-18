@@ -205,7 +205,9 @@ async function generateWithMock(page) {
     return {
       overflowX: document.documentElement.scrollWidth > window.innerWidth + 1,
       colDir: getComputedStyle(cols).flexDirection,
-      headBtnsVisible: [...document.querySelectorAll('.col-skill .col-head .btn-mini')].every((b) => b.offsetWidth > 0),
+      headBtnsVisible: [...document.querySelectorAll('.col-skill .col-head .btn-mini')]
+        .filter((b) => !b.id.startsWith('hiddenCount-')) // 隐藏计数按钮默认 display:none，属预期
+        .every((b) => b.offsetWidth > 0),
     };
   });
   check('移动端无横向溢出', !m.overflowX);
