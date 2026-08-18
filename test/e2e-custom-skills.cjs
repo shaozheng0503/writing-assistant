@@ -132,10 +132,13 @@ function check(name, ok, detail = '') {
   check('生图配置行可见（imagifly 已启用）', imgRowVisible);
   const sizeOpts = await page.evaluate(() =>
     document.getElementById('imgSizeSelect')?.options.length);
-  const countOpts = await page.evaluate(() =>
-    document.getElementById('imgCountSelect')?.options.length);
+  const countInput = await page.evaluate(() => ({
+    has: !!document.getElementById('imgCountInput'),
+    min: document.getElementById('imgCountInput')?.min,
+    max: document.getElementById('imgCountInput')?.max,
+  }));
   check('尺寸下拉 3 项', sizeOpts === 3, `got ${sizeOpts}`);
-  check('张数下拉 3 项', countOpts === 3, `got ${countOpts}`);
+  check('张数为数字输入（1–10）', countInput.has && countInput.min === '1' && countInput.max === '10', JSON.stringify(countInput));
   // 切换尺寸验证持久化
   await page.select('#imgSizeSelect', '1024x1024');
   await new Promise((r) => setTimeout(r, 200));

@@ -1390,41 +1390,57 @@ function refreshImgApiBadge() {
 /* ===== Imagifly 配图生成 ===== */
 
 /**
- * 用 LLM 从原文一次性提取 3~5 个分段画面描述
- * 返回 [{segment, prompt}, ...]
+ * 用 LLM 分析文章主题与各段落语义，为每张图片生成与对应文段相匹配的提示词
+ * 返回 [{segment, prompt}, ...]，长度 = 用户设定的张数 N（1–10）
+ * - 每张图对应文章的一个章节/段落（按顺序覆盖全文，不重复）
+ * - 各提示词主体/构图/视角互不雷同
  */
 async function deriveImagePrompts(rawText, config) {
-  const systemPrompt = `你是一个画面描述提取器。用户会给你一段完整文章，请按以下步骤工作：
+  const count = getImageCount();
+  const systemPrompt = `你是一个文章配图策划师。用户会给你一篇完整文章和需要生成的配图数量 N，请按以下步骤工作：
 
-1. 将文章按语义拆分成 3~5 个段落
-2. 为每个段落提取一个适合做配图的画面描述
+1. 通读全文，理解文章主题与叙述脉络
+2. 把文章按语义顺序划分成 N 个部分（章节或段落组），第 k 张图对应第 k 部分的内容
+3. 为每个部分构思一个与该部分内容紧密相关的画面描述：画面要能具体呈现该部分的场景/主体/氛围，而不是泛泛的文章主题插图
 
-输出格式严格为 JSON 数组，不要输出任何其他内容：
-[{"segment":"段落的中文摘要(20字内)","prompt":"english image description, under 60 words, including subject, style, lighting, color tone"}]
+输出格式严格为 JSON 数组（恰好 N 个元素，按文章顺序），不要输出任何其他内容：
+[{"segment":"该部分内容的中文摘要(20字内)","prompt":"english image description for this specific part, under 60 words, including subject, composition, style, lighting, color tone"}]
 
 要求：
-- 3 到 5 张图，根据文章长度决定
-- prompt 必须纯英文，包含主体、风格、光线、色调
-- segment 是该段落内容的中文摘要
+- 每张图的 prompt 必须体现其对应部分的独特内容（场景、主体、动作或意象），禁止多张图共用同一画面
+- N 张图在构图（特写/全景/俯视/侧写）、视角、光线氛围上要有明显差异，避免雷同
+- prompt 必须纯英文，包含主体、构图、风格、光线、色调
+- segment 是该部分内容的中文摘要
 - 不要输出任何解释、标题、代码块标记`;
 
   try {
-    const result = await callLLM(systemPrompt, rawText, { ...config, temperature: 0.3 }, () => {});
+    const userText = `文章如下：\n\n${rawText}\n\nN = ${count}`;
+    const result = await callLLM(systemPrompt, userText, { ...config, temperature: 0.4 }, () => {});
     const text = result.text || '';
     const arr = extractJsonArray(text);
     if (arr && arr.length > 0) {
-      return arr.map((item) => ({
+      // LLM 可能少给：按文章自然段循环补齐到 N，保证卡片数与设定一致
+      const items = arr.map((item) => ({
         segment: item.segment || '',
         prompt: item.prompt || '',
       }));
+      if (items.length < count) {
+        const paras = splitParagraphs(rawText);
+        for (let i = items.length; i < count && paras.length > 0; i++) {
+          const p = paras[i % paras.length];
+          items.push({ segment: p.substring(0, 30), prompt: p.substring(0, 100).replace(/\n/g, ' ') });
+        }
+      }
+      return items.slice(0, count);
     }
   } catch {}
-  // 回退：按原文段落拆分取前 3 段
+  // 回退：按原文段落拆分（不足 N 循环取，超出截断）
   const paras = splitParagraphs(rawText);
-  return paras.slice(0, 3).map((p) => ({
-    segment: p.substring(0, 30),
-    prompt: p.substring(0, 100).replace(/\n/g, ' '),
-  }));
+  if (paras.length === 0) return [];
+  return Array.from({ length: count }, (_, i) => {
+    const p = paras[i % paras.length];
+    return { segment: p.substring(0, 30), prompt: p.substring(0, 100).replace(/\n/g, ' ') };
+  });
 }
 
 /**
@@ -1481,20 +1497,40 @@ function initImageModelSelect() {
   });
 }
 
-/** 读生图尺寸/张数（下拉选择 + localStorage 持久化） */
+/** 读生图尺寸/张数（localStorage 持久化） */
 const IMG_SIZES = ['1368x768', '1024x1024', '768x1368'];
-const IMG_COUNTS = [1, 2, 3];
+const IMG_COUNT_MIN = 1, IMG_COUNT_MAX = 10, IMG_COUNT_DEFAULT = 3;
 function getImageSize() {
   const saved = localStorage.getItem('ww_img_size');
   return IMG_SIZES.includes(saved) ? saved : '1368x768';
 }
+/** 读取并校验张数输入（1–10 整数；不合法标红提示，返回 null 阻止提交） */
+function validateImgCountInput() {
+  const input = $('imgCountInput');
+  const hint = $('imgCountHint');
+  if (!input) return getImageCount();
+  const n = parseInt(input.value, 10);
+  if (!Number.isInteger(n) || n < IMG_COUNT_MIN || n > IMG_COUNT_MAX) {
+    input.classList.add('err');
+    if (hint) {
+      hint.textContent = `需 ${IMG_COUNT_MIN}–${IMG_COUNT_MAX} 的整数`;
+      hint.classList.remove('ok');
+    }
+    return null;
+  }
+  input.classList.remove('err');
+  if (hint) {
+    hint.textContent = '张';
+    hint.classList.add('ok');
+  }
+  return n;
+}
 function getImageCount() {
-  const saved = parseInt(localStorage.getItem('ww_img_count'));
-  return IMG_COUNTS.includes(saved) ? saved : 1;
+  const saved = parseInt(localStorage.getItem('ww_img_count'), 10);
+  return Number.isInteger(saved) && saved >= IMG_COUNT_MIN && saved <= IMG_COUNT_MAX ? saved : IMG_COUNT_DEFAULT;
 }
 function initImageExtraSelects() {
   const sizeSel = $('imgSizeSelect');
-  const countSel = $('imgCountSelect');
   if (sizeSel) {
     sizeSel.value = getImageSize();
     sizeSel.addEventListener('change', () => {
@@ -1503,12 +1539,22 @@ function initImageExtraSelects() {
       syncApiSizeInputs(); // API 配置面板的宽高联动
     });
   }
-  if (countSel) {
-    countSel.value = String(getImageCount());
-    countSel.addEventListener('change', () => {
-      localStorage.setItem('ww_img_count', countSel.value);
-      toast(`每画面张数: ${countSel.value}`);
+  const countInput = $('imgCountInput');
+  if (countInput) {
+    countInput.value = String(getImageCount());
+    // 输入即时校验：合法即持久化，非法标红（最终拦截在 generate() 入口）
+    countInput.addEventListener('input', () => {
+      const n = validateImgCountInput();
+      if (n !== null) localStorage.setItem('ww_img_count', String(n));
     });
+    countInput.addEventListener('blur', () => {
+      // 失焦回填最近一次合法值，避免输入框停留非法状态
+      if (validateImgCountInput() === null) {
+        countInput.value = String(getImageCount());
+        validateImgCountInput();
+      }
+    });
+    validateImgCountInput();
   }
 }
 
@@ -1619,18 +1665,19 @@ async function testImgApiConnection() {
 }
 
 /**
- * 提交生图请求 → 轮询 → 返回图片 URL 数组（imageCount>1 时多张）
+ * 提交生图请求 → 轮询 → 返回图片 URL 数组
  * 按配置分支：自定义 OpenAI 兼容 API（llm-proxy 转发 + Bearer）/ Imagifly 代理
+ * count 覆盖每请求张数（单张重生成传 1；缺省读用户设定）
  */
-async function generateImage(prompt) {
-  if (isCustomImgApi()) return generateImageViaCustomApi(prompt);
-  return generateImageViaImagifly(prompt);
+async function generateImage(prompt, countOverride) {
+  if (isCustomImgApi()) return generateImageViaCustomApi(prompt, countOverride);
+  return generateImageViaImagifly(prompt, countOverride);
 }
 
 /** 自定义 OpenAI 兼容生图接口：POST {model,prompt,n,size} → data[].url | b64_json */
-async function generateImageViaCustomApi(prompt) {
+async function generateImageViaCustomApi(prompt, countOverride) {
   const cfg = getImgApiConfig();
-  const count = getImageCount();
+  const count = countOverride ?? getImageCount();
   const res = await fetch(`/llm-proxy?target=${encodeURIComponent(cfg.baseUrl)}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
@@ -1656,7 +1703,8 @@ async function generateImageViaCustomApi(prompt) {
 }
 
 /** Imagifly 内置代理流程：submit → 轮询 → 全部图片 URL（429/限流自动退避重试） */
-async function generateImageViaImagifly(prompt) {
+async function generateImageViaImagifly(prompt, countOverride) {
+  const imageCount = countOverride ?? getImageCount();
   const MAX_SUBMIT_ATTEMPTS = 3;
   let gid = null;
   let lastErr = null;
@@ -1669,7 +1717,7 @@ async function generateImageViaImagifly(prompt) {
           prompt,
           model: getImageModel(), // 用户可配置，未配置回退 nano-banana-2
           size: getImageSize(),   // 用户可配置（16:9 / 1:1 / 9:16）
-          imageCount: getImageCount(), // 用户可配置（1~3 张/画面）
+          imageCount,             // 每请求张数（批量=用户设定，单张重生成=1）
         }),
       });
       if (!submitRes.ok) {
@@ -1714,7 +1762,7 @@ async function generateImageViaImagifly(prompt) {
         const retryRes = await fetch('/imagifly-proxy/submit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, model: getImageModel(), size: getImageSize(), imageCount: getImageCount() }),
+          body: JSON.stringify({ prompt, model: getImageModel(), size: getImageSize(), imageCount }),
         }).catch(() => null);
         if (retryRes && retryRes.ok) {
           const d = await retryRes.json().catch(() => null);
@@ -1729,7 +1777,8 @@ async function generateImageViaImagifly(prompt) {
 }
 
 /**
- * 生成全部配图（3~5 个画面 × 每画面 1~3 张），错开 20 秒提交避免限速
+ * 生成全部配图：每张图独立一次请求（提示词与文段一一对应），
+ * 错开提交避免限速；每张记录模型/尺寸/时间等元数据与提示词历史
  */
 async function generateAllImages(prompts, config) {
   state.imgBusy = true;
@@ -1737,72 +1786,66 @@ async function generateAllImages(prompts, config) {
   const gallery = $('col-gallery');
   gallery.innerHTML = '';
 
-  // 为每个 prompt 的每张图创建状态对象 + 渲染 loading 卡片
-  let flatIdx = 0;
-  prompts.forEach((p) => {
-    const count = getImageCount();
-    for (let k = 0; k < count; k++) {
-      const id = `img-${++imgIdCounter}`;
-      const imgObj = {
-        id, status: 'loading', prompt: p.prompt, caption: p.segment, url: null,
-        idx: flatIdx++, subIdx: k, // subIdx：同一画面内的第几张
-      };
-      state.images.push(imgObj);
-      renderGalleryCard(imgObj);
-    }
+  const model = isCustomImgApi() ? (getImgApiConfig().model || '未命名模型') : getImageModel();
+  const size = getImageSizeForApi();
+  const createdAt = Date.now();
+
+  // 为每个 prompt 创建状态对象 + 渲染 loading 卡片
+  prompts.forEach((p, i) => {
+    const id = `img-${++imgIdCounter}`;
+    const imgObj = {
+      id, status: 'loading', prompt: p.prompt, caption: p.segment, url: null,
+      idx: i, subIdx: 0,
+      // 元数据：详情弹窗与历史记录使用
+      model, size, createdAt: createdAt + i,
+      promptHistory: [{ prompt: p.prompt, time: createdAt + i, source: '初始生成' }],
+    };
+    state.images.push(imgObj);
+    renderGalleryCard(imgObj);
   });
 
-  // 错开 20s 提交（一个画面一次请求，返回 count 张图）
+  // 错峰提交（一张一请求；默认 20s 避免限速，测试环境可通过 ww_img_stagger_ms 调短）
+  const staggerMs = parseInt(localStorage.getItem('ww_img_stagger_ms'), 10);
+  const gap = Number.isInteger(staggerMs) && staggerMs >= 0 ? staggerMs : 20000;
   const promises = prompts.map((p, i) =>
-    new Promise((resolve) => setTimeout(resolve, i * 20000))
-      .then(() => generateImage(p.prompt))
+    new Promise((resolve) => setTimeout(resolve, i * gap))
+      .then(() => generateImage(p.prompt, 1))
       .then((urls) => {
-        const count = getImageCount();
-        // 该画面的第 k 张 ← urls[k]（若返回张数少于预期，只填有的）
-        for (let k = 0; k < count; k++) {
-          const base = i * count; // 该画面在扁平序列中的起始 idx
-          const img = state.images.find((x) => x.idx === base + k);
-          const url = urls[k];
-          if (img && url) {
-            img.status = 'done';
-            img.url = url;
-            if (count > 1 && urls.length > 1) img.caption = `${img.caption}（${k + 1}）`;
-            renderGalleryCard(img);
-            // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
-            // 外站 URL / dataURL 走通用保存端点（代理下载后落盘）；Imagifly URL 走 cookie 代理
-            const saveUrl = url.startsWith('data:')
-              ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
-              : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
-            const saveBody = url.startsWith('data:') ? url : null;
-            fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
-              .then((r) => {
-                const saved = r.headers.get('X-Saved-As');
-                if (saved) {
-                  img.savedAs = decodeURIComponent(saved);
-                  const cap = document.querySelector(`[data-imgid="${img.id}"] .img-caption`);
-                  if (cap) cap.title = `已保存: ${img.savedAs}`;
-                }
-              })
-              .catch(() => {});
-          } else if (img && !url) {
-            // 服务器只返回了部分图片：未返回的卡不标记为「失败」，
-            // 移除占位卡（避免大量红卡误导「生成失败」）；有至少 1 张即算该画面成功
-            img.status = 'skipped';
-            const card = document.querySelector(`[data-imgid="${img.id}"]`);
-            if (card) card.remove();
-          }
+        const url = urls && urls[0];
+        const img = state.images.find((x) => x.idx === i);
+        if (img && url) {
+          img.status = 'done';
+          img.url = url;
+          img.generatedAt = Date.now();
+          renderGalleryCard(img);
+          // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
+          const saveUrl = url.startsWith('data:')
+            ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
+            : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
+          const saveBody = url.startsWith('data:') ? url : null;
+          fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
+            .then((r) => {
+              const saved = r.headers.get('X-Saved-As');
+              if (saved) {
+                img.savedAs = decodeURIComponent(saved);
+                const cap = document.querySelector(`[data-imgid="${img.id}"] .img-caption`);
+                if (cap) cap.title = `已保存: ${img.savedAs}`;
+              }
+            })
+            .catch(() => {});
+        } else if (img && !url) {
+          // 服务端未返回图片：移除占位卡（有图才算成功）
+          img.status = 'skipped';
+          const card = document.querySelector(`[data-imgid="${img.id}"]`);
+          if (card) card.remove();
         }
       })
       .catch((err) => {
-        const count = getImageCount();
-        const base = i * count;
-        for (let k = 0; k < count; k++) {
-          const img = state.images.find((x) => x.idx === base + k);
-          if (img) {
-            img.status = 'error';
-            img.error = err.message;
-            renderGalleryCard(img);
-          }
+        const img = state.images.find((x) => x.idx === i);
+        if (img) {
+          img.status = 'error';
+          img.error = err.message;
+          renderGalleryCard(img);
         }
       })
   );
@@ -1846,9 +1889,14 @@ function renderGalleryCard(img) {
     const proxyUrl = `/imagifly-proxy/image?url=${encodeURIComponent(img.url)}`;
     card.innerHTML = `
       <div class="img-wrap"><img src="${proxyUrl}" alt="${escapeHtml(img.caption)}" /></div>
+      <div class="regen-spin"><div class="dots"><span></span><span></span><span></span></div>重新生成中…</div>
       <div class="img-meta"><div class="img-caption">${escapeHtml(img.caption)}</div></div>
       <span class="img-idx">${img.idx + 1}</span>
-      <span class="img-drag-hint">拖拽到拼接区</span>`;
+      <span class="img-drag-hint">拖拽到拼接区</span>
+      <span class="img-act-bar">
+        <span class="img-act" onclick="event.stopPropagation();openImgDetail('${img.id}')" title="查看提示词、模型与生成参数">详情</span>
+        <span class="img-act" onclick="event.stopPropagation();openImgRegen('${img.id}')" title="编辑提示词后重新生成此图">↻ 重生成</span>
+      </span>`;
     // 点击放大
     card.querySelector('img').addEventListener('click', (e) => {
       e.stopPropagation();
@@ -1856,9 +1904,136 @@ function renderGalleryCard(img) {
     });
   } else {
     card.innerHTML = `
-      <div class="img-error">配图失败<br>${escapeHtml(img.error || '未知错误')}</div>
+      <div class="img-error">配图失败<br>${escapeHtml(img.error || '未知错误')}<br>
+        <button class="img-retry" onclick="event.stopPropagation();openImgRegen('${img.id}')">重试</button>
+      </div>
       <div class="img-meta"><div class="img-caption">${escapeHtml(img.caption)}</div></div>
       <span class="img-idx">${img.idx + 1}</span>`;
+  }
+}
+
+/* ===== 图片详情弹窗 ===== */
+function fmtTime(ts) {
+  if (!ts) return '—';
+  const d = new Date(ts);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+}
+function openImgDetail(imgId) {
+  const img = state.images.find((i) => i.id === imgId);
+  if (!img) return;
+  const proxyUrl = img.url ? `/imagifly-proxy/image?url=${encodeURIComponent(img.url)}` : null;
+  const historyCount = (img.promptHistory || []).length;
+  $('imgDetailBody').innerHTML = `
+    ${proxyUrl ? `<img class="imgd-img" src="${proxyUrl}" alt="${escapeHtml(img.caption)}" />` : ''}
+    <div class="imgd-grid">
+      <span class="k">对应文段</span><span class="v">${escapeHtml(img.caption || '—')}</span>
+      <span class="k">提示词</span><span class="v prompt">${escapeHtml(img.prompt || '—')}</span>
+      <span class="k">模型</span><span class="v">${escapeHtml(img.model || '—')}</span>
+      <span class="k">尺寸</span><span class="v">${escapeHtml(img.size || '—')}</span>
+      <span class="k">生成时间</span><span class="v">${fmtTime(img.generatedAt || img.createdAt)}</span>
+      <span class="k">提示词版本</span><span class="v">共 ${historyCount} 版（${(img.promptHistory || []).some((h) => h.source === '编辑重生成') ? '含编辑历史' : '仅初始'}）</span>
+      ${img.savedAs ? `<span class="k">本地文件</span><span class="v">${escapeHtml(img.savedAs)}</span>` : ''}
+    </div>
+    <div class="imgd-sec">历史提示词</div>
+    <div class="regen-history">${(img.promptHistory || []).slice().reverse().map((h) => `
+      <div class="regen-h-item">
+        <span class="rh-time">${fmtTime(h.time)}</span>
+        <span class="rh-prompt">${escapeHtml(h.prompt)}</span>
+        <span class="rh-tag">${escapeHtml(h.source || '')}</span>
+      </div>`).join('') || '<div style="font-size:12px;color:var(--text-dim)">暂无记录</div>'}
+    </div>`;
+  $('imgDetailModal').style.display = 'flex';
+}
+function closeImgDetail() {
+  $('imgDetailModal').style.display = 'none';
+}
+
+/* ===== 单张重新生成（提示词编辑 + 历史回退） ===== */
+const imgRegenCtx = { imgId: null };
+function openImgRegen(imgId) {
+  const img = state.images.find((i) => i.id === imgId);
+  if (!img || img.status === 'loading') return;
+  imgRegenCtx.imgId = imgId;
+  $('regenPromptInput').value = img.prompt || '';
+  renderRegenHistory(img);
+  $('imgRegenModal').style.display = 'flex';
+}
+function renderRegenHistory(img) {
+  $('regenHistoryList').innerHTML = (img.promptHistory || []).slice().reverse().map((h, ri) => {
+    const isCurrent = ri === 0;
+    return `<div class="regen-h-item" onclick="applyPromptVersion(${(img.promptHistory || []).length - 1 - ri})" title="点击填入此版提示词">
+      <span class="rh-time">${fmtTime(h.time)}</span>
+      <span class="rh-prompt">${escapeHtml(h.prompt)}</span>
+      <span class="rh-tag">${isCurrent ? '当前' : escapeHtml(h.source || '历史')}</span>
+    </div>`;
+  }).join('') || '<div style="font-size:12px;color:var(--text-dim)">暂无历史</div>';
+}
+/** 点击历史项 → 填入编辑框（可撤销：未点确认前不改任何状态） */
+function applyPromptVersion(idx) {
+  const img = state.images.find((i) => i.id === imgRegenCtx.imgId);
+  if (!img || !img.promptHistory || !img.promptHistory[idx]) return;
+  $('regenPromptInput').value = img.promptHistory[idx].prompt;
+  toast('已填入该历史版本，确认后生效');
+}
+function closeImgRegen() {
+  $('imgRegenModal').style.display = 'none';
+  imgRegenCtx.imgId = null;
+}
+/** 二次确认后执行：编辑提示词 → 重新生成该一张 → 成功才替换（失败原图保留） */
+function confirmImgRegen() {
+  const img = state.images.find((i) => i.id === imgRegenCtx.imgId);
+  if (!img) return;
+  const newPrompt = $('regenPromptInput').value.trim();
+  if (!newPrompt) { toast('提示词不能为空'); return; }
+  if (!window.confirm(`确认用当前提示词重新生成第 ${img.idx + 1} 张图？\n\n仅替换这一张，其余图片不受影响。`)) return;
+
+  closeImgRegen();
+  regenerateSingleImage(img, newPrompt);
+}
+async function regenerateSingleImage(img, newPrompt) {
+  const card = document.querySelector(`[data-imgid="${img.id}"]`);
+  if (card) card.classList.add('regen-busy');
+  try {
+    const urls = await generateImage(newPrompt, 1);
+    const url = urls && urls[0];
+    if (!url) throw new Error('服务端未返回图片');
+    // 成功才落状态：提示词/URL/时间更新，旧提示词留在历史
+    img.prompt = newPrompt;
+    img.url = url;
+    img.status = 'done';
+    img.error = null;
+    img.model = isCustomImgApi() ? (getImgApiConfig().model || '未命名模型') : getImageModel();
+    img.size = getImageSizeForApi();
+    img.generatedAt = Date.now();
+    img.promptHistory = img.promptHistory || [];
+    img.promptHistory.push({ prompt: newPrompt, time: Date.now(), source: '编辑重生成' });
+    renderGalleryCard(img);
+    toast(`第 ${img.idx + 1} 张已重新生成`);
+    // 新图落盘
+    const saveUrl = url.startsWith('data:')
+      ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
+      : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
+    const saveBody = url.startsWith('data:') ? url : null;
+    fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
+      .then((r) => {
+        const saved = r.headers.get('X-Saved-As');
+        if (saved) img.savedAs = decodeURIComponent(saved);
+      })
+      .catch(() => {});
+  } catch (e) {
+    img.error = e.message;
+    toast(`重新生成失败：${e.message}`);
+    // 失败保留原图：状态回 done（若原来是 done），错误卡则保持 error 供再重试
+    if (img.status === 'done') {
+      renderGalleryCard(img);
+    } else {
+      img.status = 'error';
+      renderGalleryCard(img);
+    }
+  } finally {
+    const c = document.querySelector(`[data-imgid="${img.id}"]`);
+    if (c) c.classList.remove('regen-busy');
   }
 }
 
@@ -2099,6 +2274,14 @@ async function generate() {
 
   // 配图可用：imagifly cookie 已配 或 自定义生图 API 配置齐全
   const imgEnabled = (IMAGIFLY_ENABLED || isCustomImgApi()) && $('imgToggle') && $('imgToggle').checked;
+  // 张数校验（1–10）：配图开启且输入非法 → 阻止提交
+  if (imgEnabled) {
+    const n = validateImgCountInput();
+    if (n === null) {
+      toast('配图张数需为 1–10 的整数，请修正后再生成');
+      return;
+    }
+  }
 
   state.generating = true;
   const genBtn = $('generateBtn');
@@ -2747,6 +2930,12 @@ window.adjustReadingFs = adjustReadingFs;
 window.toggleCardHidden = toggleCardHidden;
 window.unhideAllCards = unhideAllCards;
 window.toggleSyncScroll = toggleSyncScroll;
+window.openImgDetail = openImgDetail;
+window.closeImgDetail = closeImgDetail;
+window.openImgRegen = openImgRegen;
+window.closeImgRegen = closeImgRegen;
+window.applyPromptVersion = applyPromptVersion;
+window.confirmImgRegen = confirmImgRegen;
 window.openSkillForm = openSkillForm;
 window.editCustomSkillForm = editCustomSkillForm;
 window.submitSkillForm = submitSkillForm;
@@ -2834,6 +3023,10 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if ($('lightbox').style.display !== 'none') {
       closeLightbox();
+    } else if ($('imgDetailModal').style.display !== 'none') {
+      closeImgDetail();
+    } else if ($('imgRegenModal').style.display !== 'none') {
+      closeImgRegen();
     } else if ($('page-result').classList.contains('active')) {
       showInputPage();
     }

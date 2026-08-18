@@ -120,15 +120,12 @@
           <option value="768x1368">9:16 竖图</option>
         </select>
       </label>
-      <label class="img-model-pick">
+      <label class="img-model-pick img-count-pick">
         <span class="img-model-label">张数</span>
-        <select id="imgCountSelect" title="每段画面生成的图片张数">
-          <option value="1" selected>1 张</option>
-          <option value="2">2 张</option>
-          <option value="3">3 张</option>
-        </select>
+        <input type="number" id="imgCountInput" min="1" max="10" step="1" value="3" title="每篇文章生成的配图数量（1–10 张）">
+        <span class="img-count-hint" id="imgCountHint"></span>
       </label>
-      <span class="img-hint">从原文分段提取画面描述，调用生图 API 生成插图，可拖拽到拼接区</span>
+      <span class="img-hint">LLM 按文章各章节语义生成 N 张配图的提示词，每张对应一个文段，可拖拽到拼接区</span>
     </div>
 
     <!-- 生图 API 配置面板 -->
@@ -335,6 +332,38 @@
       </div>
       <div class="export-preview-head">预览</div>
       <div class="export-preview" id="exportPreview"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 图片详情弹窗 -->
+<div class="export-modal" id="imgDetailModal" style="display:none">
+  <div class="export-dialog">
+    <div class="export-head">
+      <span>图片详情</span>
+      <span class="export-close" onclick="closeImgDetail()">✕</span>
+    </div>
+    <div class="export-body" id="imgDetailBody"></div>
+  </div>
+</div>
+
+<!-- 单张重新生成弹窗 -->
+<div class="export-modal" id="imgRegenModal" style="display:none">
+  <div class="export-dialog">
+    <div class="export-head">
+      <span>重新生成此图</span>
+      <span class="export-close" onclick="closeImgRegen()">✕</span>
+    </div>
+    <div class="export-body">
+      <div class="export-tip">编辑提示词后重新生成，只替换这一张，不影响其他图片。历史提示词全部保留，可随时回退。</div>
+      <div class="regen-field-label">当前提示词（可编辑）</div>
+      <textarea class="regen-prompt-input" id="regenPromptInput" rows="4"></textarea>
+      <div class="regen-history-head">历史版本（点击回退）</div>
+      <div class="regen-history" id="regenHistoryList"></div>
+      <div class="export-actions">
+        <button class="btn export-btn" id="regenCancelBtn" onclick="closeImgRegen()">取消</button>
+        <button class="btn export-btn main" id="regenGoBtn" onclick="confirmImgRegen()">确认重新生成</button>
+      </div>
     </div>
   </div>
 </div>

@@ -31,6 +31,20 @@ function mockSse(text) {
   page.on('request', (req) => {
     const url = req.url();
     if (url.includes('/llm-proxy')) {
+      let sys = '';
+      try { sys = (JSON.parse(req.postData() || '{}').messages || [])[0]?.content || ''; } catch {}
+      if (sys.includes('配图策划师')) {
+        // 画面描述：返回 3 段提示词 JSON（新架构 N 张 = N 个提示词）
+        req.respond({
+          status: 200, contentType: 'text/event-stream',
+          body: mockSse(JSON.stringify([
+            { segment: '画面一', prompt: 'mock prompt one' },
+            { segment: '画面二', prompt: 'mock prompt two' },
+            { segment: '画面三', prompt: 'mock prompt three' },
+          ])),
+        });
+        return;
+      }
       req.respond({ status: 200, contentType: 'text/event-stream', body: mockSse(MOCK_TEXT) });
       return;
     }
@@ -67,8 +81,11 @@ function mockSse(text) {
 
   await page.goto(BASE, { waitUntil: 'networkidle0' });
   await page.evaluate(() => localStorage.clear());
-  // 预设张数=3（复现「张数不足大量失败」场景）
-  await page.evaluate(() => { localStorage.setItem('ww_img_count', '3'); });
+  // 预设张数=3（复现「张数不足大量失败」场景）+ 测试用快速错峰（默认 20s×3 会让 compare 构建等 45s+）
+  await page.evaluate(() => {
+    localStorage.setItem('ww_img_count', '3');
+    localStorage.setItem('ww_img_stagger_ms', '100');
+  });
   await page.reload({ waitUntil: 'networkidle0' });
   await page.evaluate(() => {
     document.querySelector('#rawInput').value = '第一段内容甲。\n\n第二段内容乙。\n\n第三段内容丙。';
@@ -155,10 +172,11 @@ function mockSse(text) {
   await page.setViewport({ width: 1440, height: 600 }); // 矮视口确保列有滚动空间
   await page.waitForFunction(() => document.querySelectorAll('.col-skill .para-card').length >= 9, { timeout: 30000 });
   // 等 compare 构建完成（列头出现分段提示 .sec-hint），同步滚动按段落对齐依赖它
-  await page.waitForFunction(() => document.querySelectorAll('.col-head .sec-hint').length >= 3, { timeout: 15000 }).catch(() => {});
+  const cmpOk = await page.waitForFunction(() => document.querySelectorAll('.col-head .sec-hint').length >= 3, { timeout: 30000 }).then(() => true).catch(() => false);
   await new Promise((r) => setTimeout(r, 1500));
   // 4a 默认开启，滚动联动（滚动容器是列元素 #col-{skill} 本身）
-  const sync1 = await page.evaluate(() => {
+  const sync1 = await page.evaluate((cmpReady) => {
+    if (!cmpReady) return { skip: true, reason: 'compare-not-ready' };
     const bodies = [...document.querySelectorAll('.col-skill .col-body')];
     const scrollable = bodies.filter((e) => e.scrollHeight > e.clientHeight);
     if (scrollable.length < 2) return { skip: true, info: bodies.map((c) => ({ id: c.id, sh: c.scrollHeight, ch: c.clientHeight, cards: c.querySelectorAll('.para-card').length })) };
@@ -168,8 +186,9 @@ function mockSse(text) {
     const before = dst.scrollTop;
     src.scrollTop = Math.floor(src.scrollHeight / 2); // 滚到中部，跨越段落边界触发对齐联动
     return new Promise((resolve) => setTimeout(() => resolve({ before, after: dst.scrollTop }), 350));
-  });
-  check('滚动一列其余列联动', !sync1.skip && sync1.after !== sync1.before, JSON.stringify(sync1));
+  }, cmpOk);
+  check('compare 就绪后滚动一列其余列联动', !sync1.skip && sync1.after !== sync1.before, JSON.stringify(sync1));
+  check('compare 分段提示在 30s 内构建完成', cmpOk);
   // 4b 关闭开关后不联动
   await page.evaluate(() => window.toggleSyncScroll());
   await new Promise((r) => setTimeout(r, 200));
