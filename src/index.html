@@ -82,13 +82,71 @@
       <label class="img-toggle">
         <input type="checkbox" id="imgToggle" checked>
         <span class="toggle-track"><span class="toggle-thumb"></span></span>
-        <span class="toggle-label">同时生成 3~5 张配图</span>
+        <span class="toggle-label">同时生成配图</span>
       </label>
       <label class="img-model-pick">
         <span class="img-model-label">生图模型</span>
         <select id="imgModelSelect" title="切换后立即生效，下次生图即用新模型"></select>
       </label>
+      <label class="img-model-pick">
+        <span class="img-model-label">尺寸</span>
+        <select id="imgSizeSelect" title="生成图片的宽高比">
+          <option value="1368x768" selected>16:9 横图</option>
+          <option value="1024x1024">1:1 方图</option>
+          <option value="768x1368">9:16 竖图</option>
+        </select>
+      </label>
+      <label class="img-model-pick">
+        <span class="img-model-label">张数</span>
+        <select id="imgCountSelect" title="每段画面生成的图片张数">
+          <option value="1" selected>1 张</option>
+          <option value="2">2 张</option>
+          <option value="3">3 张</option>
+        </select>
+      </label>
       <span class="img-hint">从原文分段提取画面描述，调用 Imagifly 生成插图，可拖拽到拼接区</span>
+    </div>
+
+    <!-- 技能管理面板 -->
+    <div class="skill-manager" id="skillManager">
+      <div class="sm-head" id="skillManagerHead">
+        <span class="sm-title">⚙ 技能管理</span>
+        <span class="sm-count" id="skillCount"></span>
+        <span class="sm-hint">内置三技能 + 最多 5 个自定义技能；自定义技能用你写的系统提示词改写，生成时多出一列</span>
+        <span class="sm-caret" id="skillManagerCaret">▾</span>
+      </div>
+      <div class="sm-body" id="skillManagerBody">
+        <div id="skillManagerList"></div>
+        <div class="sm-form-toggle" id="skillFormToggle" onclick="openSkillForm()"><span id="skillFormToggleText">▸ 添加技能</span></div>
+        <div class="sm-form" id="skillForm" style="display:none">
+          <div class="sm-form-title" id="skillFormTitle">添加自定义技能</div>
+          <div class="sm-form-row">
+            <div class="llm-field">
+              <label>名称（≤24字）</label>
+              <input type="text" id="skillName" placeholder="如：小红书文案风" maxlength="24">
+            </div>
+            <div class="llm-field">
+              <label>标识色</label>
+              <input type="color" id="skillColor" value="#7c3aed" list="skillColorPresets">
+              <datalist id="skillColorPresets">
+                <option value="#7c3aed"></option>
+                <option value="#0891b2"></option>
+                <option value="#dc2626"></option>
+                <option value="#65a30d"></option>
+                <option value="#c026d3"></option>
+              </datalist>
+            </div>
+          </div>
+          <div class="llm-field">
+            <label>系统提示词（这个技能如何改写文字，越具体越好）</label>
+            <textarea id="skillPrompt" rows="5" placeholder="例：你是一个小红书风格改写器。规则：&#10;1. 每段开头用 emoji 点题&#10;2. 句子口语化、短促、有网感&#10;3. 保留原文全部事实信息，不得杜撰&#10;4. 直接输出改写后的正文"></textarea>
+          </div>
+          <div class="sm-form-actions">
+            <button class="btn btn-sm" onclick="openSkillForm()">取消</button>
+            <button class="btn btn-sm btn-primary" onclick="submitSkillForm()"><span id="skillFormSubmitText">添加</span></button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -123,40 +181,7 @@
       </div>
     </div>
 
-    <!-- 三技能列 -->
-    <div class="col">
-      <div class="col-head" style="border-top:3px solid var(--c1)">
-        <span class="col-dot" style="background:var(--c1)"></span>
-        <span>human-writing</span>
-        <span class="skill-desc">卡兹克</span>
-        <button class="btn btn-mini" onclick="addSelectedToStitch('human-writing')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
-        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('human-writing')" title="重新生成此列">↻</button>
-        <button class="btn btn-mini" onclick="pickAll('human-writing')">全选</button>
-      </div>
-      <div class="col-body" id="col-human-writing"></div>
-    </div>
-    <div class="col">
-      <div class="col-head" style="border-top:3px solid var(--c2)">
-        <span class="col-dot" style="background:var(--c2)"></span>
-        <span>humanizer-zh</span>
-        <span class="skill-desc">归藏</span>
-        <button class="btn btn-mini" onclick="addSelectedToStitch('humanizer-zh')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
-        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('humanizer-zh')" title="重新生成此列">↻</button>
-        <button class="btn btn-mini" onclick="pickAll('humanizer-zh')">全选</button>
-      </div>
-      <div class="col-body" id="col-humanizer-zh"></div>
-    </div>
-    <div class="col">
-      <div class="col-head" style="border-top:3px solid var(--c3)">
-        <span class="col-dot" style="background:var(--c3)"></span>
-        <span>ljg-plain</span>
-        <span class="skill-desc">李继刚</span>
-        <button class="btn btn-mini" onclick="addSelectedToStitch('ljg-plain')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
-        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('ljg-plain')" title="重新生成此列">↻</button>
-        <button class="btn btn-mini" onclick="pickAll('ljg-plain')">全选</button>
-      </div>
-      <div class="col-body" id="col-ljg-plain"></div>
-    </div>
+    <!-- 技能列（动态渲染：内置三技能 + 用户自定义技能，见 main.js renderColumns()） -->
 
     <!-- 拼接区 -->
     <div class="col col-stitch">

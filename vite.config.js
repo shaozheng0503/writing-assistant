@@ -175,13 +175,17 @@ function imagiflyProxyPlugin(cookie) {
 
           let status = 'pending';
           let imageUrl = null;
+          let imageUrls = null; // imageCount > 1 时全部图片 URL
           let error = null;
 
           if (apiJson.generation && typeof apiJson.generation === 'object') {
             status = apiJson.generation.status || 'pending';
             if (status === 'success') {
               const assets = apiJson.generation.assets || [];
-              if (assets.length > 0) imageUrl = assets[0].url;
+              if (assets.length > 0) {
+                imageUrl = assets[0].url;
+                imageUrls = assets.map((a) => a.url).filter(Boolean);
+              }
             } else if (status === 'failed') {
               error = apiJson.generation.error || apiJson.error || 'failed';
             }
@@ -190,7 +194,7 @@ function imagiflyProxyPlugin(cookie) {
           }
 
           res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ status, imageUrl, error }));
+          res.end(JSON.stringify({ status, imageUrl, imageUrls, error }));
         } catch (e) {
           res.statusCode = 500;
           res.end(JSON.stringify({ error: e.message }));

@@ -30,6 +30,79 @@ const SKILL_PROMPTS = {
     '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。',
 };
 
+/* ===== 自定义技能数据层 ===== */
+/**
+ * 自定义技能持久化：localStorage `ww_custom_skills`
+ * 格式：[{id, name, color, prompt, enabled}]
+ * - id 形如 custom-<base36 时间戳>，用作列 DOM id / state 键 / pid 前缀，
+ *   只含安全字符（字母数字连字符），可直接拼进选择器
+ * - 内置技能不可删改；自定义技能可增删改、可停用（停用后不参与生成/对齐）
+ */
+function loadCustomSkills() {
+  try {
+    const arr = JSON.parse(localStorage.getItem('ww_custom_skills') || '[]');
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((s) => s && s.id && s.name && s.prompt)
+      .map((s) => ({
+        id: String(s.id).replace(/[^a-zA-Z0-9-]/g, ''),
+        name: String(s.name).slice(0, 24),
+        color: /^#[0-9a-fA-F]{6}$/.test(s.color || '') ? s.color : '#7c3aed',
+        prompt: String(s.prompt),
+        enabled: s.enabled !== false,
+      }))
+      .filter((s) => s.id.startsWith('custom-'));
+  } catch {
+    return [];
+  }
+}
+function saveCustomSkills() {
+  localStorage.setItem('ww_custom_skills', JSON.stringify(state.customSkills));
+}
+
+/** 内置技能 id（顺序即列顺序） */
+const BUILTIN_SKILLS = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+
+/** 当前生效技能列表（内置 + 已启用自定义）——全应用唯一技能来源 */
+function getActiveSkills() {
+  return [
+    ...BUILTIN_SKILLS,
+    ...state.customSkills.filter((s) => s.enabled).map((s) => s.id),
+  ];
+}
+function getCustomSkill(id) {
+  return state.customSkills.find((s) => s.id === id) || null;
+}
+
+/** 技能元信息（内置查 SKILL_META，自定义查 state；找不到给中性兜底） */
+function getSkillMeta(skill) {
+  if (SKILL_META[skill]) return SKILL_META[skill];
+  const c = getCustomSkill(skill);
+  if (c) return { label: c.name, color: c.color, desc: '自定义' };
+  return { label: skill, color: '#7c3aed', desc: '' };
+}
+
+/** 自定义技能的通用任务后缀：与内置技能同样的输出纪律 */
+const CUSTOM_TASK_SUFFIX = (name) =>
+  `\n\n## 当前任务\n你是「${name}」技能。用户会给你一段文字，请严格按上述规则改写它。输出要求：\n1. 直接输出改写后的正文，禁止输出任何 markdown 标题（#、##）、禁止评分、禁止附更改总结\n2. 不要解释你做了什么\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点，不要逐句分析原文，不要预写草稿。`;
+
+/** 技能 → system prompt（内置用 SKILL_PROMPTS，自定义用「用户提示词 + 任务后缀」运行时合成） */
+function getSkillPrompt(skill) {
+  if (SKILL_PROMPTS[skill]) return SKILL_PROMPTS[skill];
+  const c = getCustomSkill(skill);
+  if (c) return c.prompt.trim() + CUSTOM_TASK_SUFFIX(c.name);
+  return '';
+}
+
+/** 为生效技能补齐 state 结构（generated/paragraphs/busy 以技能 id 为键） */
+function ensureSkillState() {
+  for (const id of getActiveSkills()) {
+    if (!(id in state.generated)) state.generated[id] = '';
+    if (!(id in state.paragraphs)) state.paragraphs[id] = [];
+    if (!(id in state.busy)) state.busy[id] = false;
+  }
+}
+
 /* ===== 状态 ===== */
 const state = {
   rawText: '',
@@ -40,6 +113,7 @@ const state = {
   stitch: [],          // {type:'text', skill, text, editing} | {type:'image', imgId, prompt, url, caption}
   selectedStitchIdx: null,
   busy: { 'human-writing': false, 'humanizer-zh': false, 'ljg-plain': false },
+  customSkills: loadCustomSkills(),  // 自定义技能 [{id,name,color,prompt,enabled}]
   imgBusy: false,
   compare: null,       // {sections:[{title,gist}], assigns:{skill:[paraIdx→secIdx|-1]}}
   compareBuilding: false,
@@ -532,14 +606,14 @@ async function buildCompare(config) {
     const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
     const sections = await deriveSections(state.rawText, fastConfig);
     const assigns = {};
-    for (const skill of Object.keys(state.generated)) {
+    for (const skill of getActiveSkills()) {
       const paras = state.paragraphs[skill];
       assigns[skill] =
         paras.length > 0 ? await alignSkillToSections(sections, paras, fastConfig) : [];
     }
     state.compare = { sections, assigns };
-    // 重渲染三列：卡片按标准段着色 + 列头加当前段指示 + 绑定同步滚动
-    ['human-writing', 'humanizer-zh', 'ljg-plain'].forEach((s) => {
+    // 重渲染技能列：卡片按标准段着色 + 列头加当前段指示 + 绑定同步滚动
+    getActiveSkills().forEach((s) => {
       renderColumnCards(s);
       const head = $('col-' + s).previousElementSibling;
       if (head && !head.querySelector('.sec-hint')) {
@@ -580,7 +654,7 @@ function switchView(mode) {
 const syncScroll = { locked: false, raf: null };
 
 function bindSyncScroll() {
-  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  const skills = getActiveSkills();
   skills.forEach((skill) => {
     const el = $('col-' + skill);
     if (!el || el.dataset.syncBound) return;
@@ -594,11 +668,11 @@ function bindSyncScroll() {
   });
 }
 
-/** 以 skill 列的当前视口为驱动，同步其余两列 */
+/** 以 skill 列的当前视口为驱动，同步其余列 */
 function driveSyncScroll(sourceSkill) {
   try {
     const { assigns } = state.compare;
-    const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+    const skills = getActiveSkills();
     const srcEl = $('col-' + sourceSkill);
     const srcAssign = assigns[sourceSkill] || [];
 
@@ -681,17 +755,51 @@ function updateCompareUI() {
   }
 }
 
-/** 渲染分段对比视图：每个标准段一行，三 skill 横向并排 */
+/* ===== 动态列渲染 ===== */
+/**
+ * 按当前生效技能（内置 + 已启用自定义）重建技能列 DOM。
+ * 列布局固定为：[配图库][技能列 ×N][拼接区]，技能列整体在中间段重建。
+ * 列 id 约定 col-<skill>，与既有交互（选择/双击收入/对齐联动/同步滚动）完全兼容。
+ */
+function renderColumns() {
+  ensureSkillState();
+  const wrap = $('columnsWrap');
+  // 删掉旧技能列（data-skill 标记；配图库/拼接区不带该标记，保持不动）
+  wrap.querySelectorAll('.col[data-skill]').forEach((el) => el.remove());
+  const stitchColEl = wrap.querySelector('.col-stitch');
+  const skills = getActiveSkills();
+  const frag = document.createDocumentFragment();
+  for (const skill of skills) {
+    const meta = getSkillMeta(skill);
+    const col = document.createElement('div');
+    col.className = 'col col-skill';
+    col.dataset.skill = skill;
+    col.innerHTML = `
+      <div class="col-head" style="border-top:3px solid ${meta.color}">
+        <span class="col-dot" style="background:${meta.color}"></span>
+        <span>${escapeHtml(meta.label)}</span>
+        <span class="skill-desc">${escapeHtml(meta.author || meta.desc || '')}</span>
+        <button class="btn btn-mini" onclick="addSelectedToStitch('${skill}')" title="把选中（或全文）段落加入拼接区">加入拼接区</button>
+        <button class="btn btn-mini btn-regen" onclick="regenerateColumn('${skill}')" title="重新生成此列">↻</button>
+        <button class="btn btn-mini" onclick="pickAll('${skill}')">全选</button>
+      </div>
+      <div class="col-body" id="col-${skill}"></div>`;
+    frag.appendChild(col);
+  }
+  wrap.insertBefore(frag, stitchColEl);
+}
+
+/** 渲染分段对比视图：每个标准段一行，各 skill 横向并排 */
 function renderCompare() {
   const wrap = $('compareView');
   if (!state.compare) {
     wrap.innerHTML = state.compareBuilding
-      ? '<div class="thinking" style="padding:40px 0;justify-content:center"><div class="dots"><span></span><span></span><span></span></div>正在分析文章结构并对齐三列输出…</div>'
+      ? '<div class="thinking" style="padding:40px 0;justify-content:center"><div class="dots"><span></span><span></span><span></span></div>正在分析文章结构并对齐各列输出…</div>'
       : '<div class="stitch-empty" style="margin:40px 20px">分段对比数据不可用<br>可点击「重新生成」后再试</div>';
     return;
   }
   const { sections, assigns } = state.compare;
-  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  const skills = getActiveSkills();
 
   const renderCell = (pid, pi, paras) => {
     const isSel = state.selectedPicks.has(pid);
@@ -723,7 +831,7 @@ function renderCompare() {
           <div class="cmp-sec-gist">${escapeHtml(sec.gist)}</div>
           <button class="btn btn-mini cmp-row-btn" onclick="addCompareRowToStitch(${si})" title="把此段中选中的（或全部）卡片收入拼接区">整行收入</button>
         </div>
-        <div class="cmp-cells">${cells}</div>
+        <div class="cmp-cells" style="--cmp-n:${skills.length}">${cells}</div>
       </div>`;
     })
     .join('');
@@ -751,7 +859,7 @@ function renderCompare() {
         <div class="cmp-sec-title">✦ 新增内容</div>
         <div class="cmp-sec-gist">原文中没有对应部分的补充段落（如结尾总结）</div>
       </div>
-      <div class="cmp-cells">${cells}</div>
+      <div class="cmp-cells" style="--cmp-n:${skills.length}">${cells}</div>
     </div>`;
   }
 
@@ -767,7 +875,7 @@ function renderCompare() {
 function addCompareRowToStitch(secIdx) {
   if (!state.compare) return;
   const { assigns } = state.compare;
-  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  const skills = getActiveSkills();
   const picked = [];
   skills.forEach((skill) => {
     (assigns[skill] || []).forEach((target, pi) => {
@@ -789,6 +897,129 @@ function addCompareRowToStitch(secIdx) {
   renderStitch();
   saveStitch();
   toast(`已收入 ${items.length} 段（可在拼接区排序）`);
+}
+
+/* ===== 技能管理面板（输入页折叠面板：技能列表 + 添加/编辑/删除/启停） ===== */
+/**
+ * 面板数据流：
+ * - renderSkillManager()：全量重绘技能列表（内置只读 + 自定义带操作按钮）
+ * - 编辑态用 editingSkillId 标记（null=添加模式，'custom-xxx'=编辑模式）
+ * - 增删改启停 → 更新 state.customSkills → saveCustomSkills() → renderSkillManager()
+ */
+let editingSkillId = null;
+
+function renderSkillManager() {
+  const listEl = $('skillManagerList');
+  if (!listEl) return;
+  // 内置技能（只读展示，附 GitHub 链接）
+  const builtinRows = BUILTIN_SKILLS.map((id) => {
+    const m = SKILL_META[id];
+    return `<div class="sm-row sm-builtin">
+      <span class="dot" style="background:${m.color}"></span>
+      <span class="sm-name">${escapeHtml(m.label)}</span>
+      <span class="sm-desc">${escapeHtml(m.desc || '')}</span>
+      <a class="sm-link" href="${m.github}" target="_blank" title="查看 SKILL.md 源仓库">源仓库 ↗</a>
+      <span class="sm-badge">内置</span>
+    </div>`;
+  }).join('');
+  // 自定义技能
+  const customRows = state.customSkills.map((s) => {
+    const editing = editingSkillId === s.id;
+    return `<div class="sm-row sm-custom ${editing ? 'sm-editing' : ''}">
+      <input type="checkbox" class="sm-toggle" ${s.enabled ? 'checked' : ''} onchange="toggleCustomSkill('${s.id}')" title="${s.enabled ? '停用（不参与生成）' : '启用'}">
+      <span class="dot" style="background:${s.color}"></span>
+      <span class="sm-name">${escapeHtml(s.name)}</span>
+      <span class="sm-desc">${escapeHtml(s.prompt.substring(0, 30))}${s.prompt.length > 30 ? '…' : ''}</span>
+      <span class="sm-act" onclick="editCustomSkillForm('${s.id}')">编辑</span>
+      <span class="sm-act sm-act-danger" onclick="deleteCustomSkill('${s.id}')">删除</span>
+    </div>`;
+  }).join('');
+  listEl.innerHTML =
+    builtinRows +
+    (customRows || '<div class="sm-empty">还没有自定义技能。展开下方「添加技能」写一个试试。</div>');
+
+  // 添加/编辑表单区
+  const form = $('skillForm');
+  if (!form) return;
+  if (editingSkillId === null) {
+    form.style.display = 'none';
+    $('skillFormToggleText').textContent = '▸ 添加技能';
+  } else {
+    form.style.display = '';
+    $('skillFormToggleText').textContent = '▾ 收起表单';
+    const editing = editingSkillId !== '' ? getCustomSkill(editingSkillId) : null;
+    if (editing) {
+      $('skillName').value = editing.name;
+      $('skillColor').value = editing.color;
+      $('skillPrompt').value = editing.prompt;
+      $('skillFormTitle').textContent = `编辑技能：${editing.name}`;
+      $('skillFormSubmitText').textContent = '保存修改';
+    } else {
+      $('skillFormTitle').textContent = '添加自定义技能';
+      $('skillFormSubmitText').textContent = '添加';
+    }
+  }
+}
+
+/** 展开添加表单（editingSkillId='' 表示新增模式） */
+function openSkillForm() {
+  editingSkillId = editingSkillId === null ? '' : null; // 再点一次收起
+  if (editingSkillId === '') {
+    $('skillName').value = '';
+    $('skillColor').value = '#7c3aed';
+    $('skillPrompt').value = '';
+  }
+  renderSkillManager();
+}
+function editCustomSkillForm(id) {
+  editingSkillId = id;
+  renderSkillManager();
+}
+function submitSkillForm() {
+  const name = $('skillName').value.trim();
+  const color = $('skillColor').value;
+  const prompt = $('skillPrompt').value.trim();
+  if (!name) { toast('技能名称不能为空'); return; }
+  if (prompt.length < 10) { toast('系统提示词太短了（至少 10 字）'); return; }
+  if (editingSkillId) {
+    // 编辑模式
+    const s = getCustomSkill(editingSkillId);
+    if (!s) { toast('技能不存在'); editingSkillId = null; renderSkillManager(); return; }
+    s.name = name.slice(0, 24);
+    s.color = color;
+    s.prompt = prompt;
+    saveCustomSkills();
+    editingSkillId = null;
+    renderSkillManager();
+    toast('技能已更新');
+  } else {
+    // 添加模式
+    if (state.customSkills.length >= 5) { toast('最多 5 个自定义技能（列宽限制）'); return; }
+    const id = 'custom-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    state.customSkills.push({ id, name: name.slice(0, 24), color, prompt, enabled: true });
+    saveCustomSkills();
+    editingSkillId = null;
+    renderSkillManager();
+    toast(`已添加技能「${name}」，点「生成三版」即会多出一列`);
+  }
+}
+function toggleCustomSkill(id) {
+  const s = getCustomSkill(id);
+  if (!s) return;
+  s.enabled = !s.enabled;
+  saveCustomSkills();
+  renderSkillManager();
+  toast(s.enabled ? `已启用「${s.name}」` : `已停用「${s.name}」（下次生成不再出现）`);
+}
+function deleteCustomSkill(id) {
+  const s = getCustomSkill(id);
+  if (!s) return;
+  if (!confirm(`确定删除自定义技能「${s.name}」？\n（拼接区中已收入的该技能段落不受影响）`)) return;
+  state.customSkills = state.customSkills.filter((x) => x.id !== id);
+  saveCustomSkills();
+  if (editingSkillId === id) editingSkillId = null;
+  renderSkillManager();
+  toast('已删除');
 }
 
 /* ===== Imagifly 配图生成 ===== */
@@ -862,15 +1093,61 @@ function initImageModelSelect() {
   if (!sel) return;
   sel.innerHTML = IMAGE_MODELS.map(
     (m) => `<option value="${m.slug}"${m.slug === getImageModel() ? ' selected' : ''}>${m.label}</option>`
-  ).join('');
+  ).join('') + `<option value="__custom__">自定义 slug…</option>`;
   sel.addEventListener('change', () => {
+    if (sel.value === '__custom__') {
+      const slug = prompt('输入 Imagifly 生图模型的 slug（可在 imagifly.net 控制台查看）：');
+      if (slug && slug.trim()) {
+        localStorage.setItem('ww_img_model', slug.trim());
+        toast(`生图模型已切换: ${slug.trim()}`);
+        // 选中项显示自定义 slug（select 里没有对应 option，补一个）
+        const opt = document.createElement('option');
+        opt.value = slug.trim();
+        opt.textContent = `${slug.trim()} · 自定义`;
+        sel.insertBefore(opt, sel.lastElementChild);
+        sel.value = slug.trim();
+        return;
+      }
+      sel.value = getImageModel(); // 取消输入 → 回退当前生效值
+      return;
+    }
     setImageModel(sel.value);
     toast(`生图模型已切换: ${sel.value}`);
   });
 }
 
+/** 读生图尺寸/张数（下拉选择 + localStorage 持久化） */
+const IMG_SIZES = ['1368x768', '1024x1024', '768x1368'];
+const IMG_COUNTS = [1, 2, 3];
+function getImageSize() {
+  const saved = localStorage.getItem('ww_img_size');
+  return IMG_SIZES.includes(saved) ? saved : '1368x768';
+}
+function getImageCount() {
+  const saved = parseInt(localStorage.getItem('ww_img_count'));
+  return IMG_COUNTS.includes(saved) ? saved : 1;
+}
+function initImageExtraSelects() {
+  const sizeSel = $('imgSizeSelect');
+  const countSel = $('imgCountSelect');
+  if (sizeSel) {
+    sizeSel.value = getImageSize();
+    sizeSel.addEventListener('change', () => {
+      localStorage.setItem('ww_img_size', sizeSel.value);
+      toast(`图片尺寸: ${sizeSel.value}`);
+    });
+  }
+  if (countSel) {
+    countSel.value = String(getImageCount());
+    countSel.addEventListener('change', () => {
+      localStorage.setItem('ww_img_count', countSel.value);
+      toast(`每画面张数: ${countSel.value}`);
+    });
+  }
+}
+
 /**
- * 提交生图请求 → 轮询 → 返回图片 URL
+ * 提交生图请求 → 轮询 → 返回图片 URL 数组（imageCount>1 时多张）
  */
 async function generateImage(prompt) {
   const submitRes = await fetch('/imagifly-proxy/submit', {
@@ -879,8 +1156,8 @@ async function generateImage(prompt) {
     body: JSON.stringify({
       prompt,
       model: getImageModel(), // 用户可配置，未配置回退 nano-banana-2
-      size: '1368x768',
-      imageCount: 1,
+      size: getImageSize(),   // 用户可配置（16:9 / 1:1 / 9:16）
+      imageCount: getImageCount(), // 用户可配置（1~3 张/画面）
     }),
   });
   if (!submitRes.ok) {
@@ -896,8 +1173,15 @@ async function generateImage(prompt) {
     const pollRes = await fetch(`/imagifly-proxy/poll?id=${gid}`);
     if (!pollRes.ok) continue;
     const pollData = await pollRes.json();
-    if (pollData.status === 'success' && pollData.imageUrl) {
-      return pollData.imageUrl;
+    if (pollData.status === 'success') {
+      // 多图：全部 URL；单图/旧代理：imageUrl
+      const urls = Array.isArray(pollData.imageUrls) && pollData.imageUrls.length > 0
+        ? pollData.imageUrls
+        : pollData.imageUrl
+          ? [pollData.imageUrl]
+          : [];
+      if (urls.length > 0) return urls;
+      continue; // success 但没 URL（数据异常）→ 继续轮询几轮
     }
     if (pollData.status === 'failed') {
       throw new Error(`生成失败: ${pollData.error || '未知'}`);
@@ -907,7 +1191,7 @@ async function generateImage(prompt) {
 }
 
 /**
- * 生成全部配图（3~5 张），错开 20 秒提交避免限速
+ * 生成全部配图（3~5 个画面 × 每画面 1~3 张），错开 20 秒提交避免限速
  */
 async function generateAllImages(prompts, config) {
   state.imgBusy = true;
@@ -915,43 +1199,66 @@ async function generateAllImages(prompts, config) {
   const gallery = $('col-gallery');
   gallery.innerHTML = '';
 
-  // 为每个 prompt 创建图片状态对象 + 渲染 loading 卡片
-  prompts.forEach((p, i) => {
-    const id = `img-${++imgIdCounter}`;
-    const imgObj = { id, status: 'loading', prompt: p.prompt, caption: p.segment, url: null, idx: i };
-    state.images.push(imgObj);
-    renderGalleryCard(imgObj);
+  // 为每个 prompt 的每张图创建状态对象 + 渲染 loading 卡片
+  let flatIdx = 0;
+  prompts.forEach((p) => {
+    const count = getImageCount();
+    for (let k = 0; k < count; k++) {
+      const id = `img-${++imgIdCounter}`;
+      const imgObj = {
+        id, status: 'loading', prompt: p.prompt, caption: p.segment, url: null,
+        idx: flatIdx++, subIdx: k, // subIdx：同一画面内的第几张
+      };
+      state.images.push(imgObj);
+      renderGalleryCard(imgObj);
+    }
   });
 
-  // 错开 20s 提交
+  // 错开 20s 提交（一个画面一次请求，返回 count 张图）
   const promises = prompts.map((p, i) =>
     new Promise((resolve) => setTimeout(resolve, i * 20000))
       .then(() => generateImage(p.prompt))
-      .then((url) => {
-        const img = state.images.find((x) => x.idx === i);
-        if (img) {
-          img.status = 'done';
-          img.url = url;
-          renderGalleryCard(img);
-          // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
-          fetch(`/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`)
-            .then((r) => {
-              const saved = r.headers.get('X-Saved-As');
-              if (saved) {
-                img.savedAs = decodeURIComponent(saved);
-                const cap = document.querySelector(`[data-imgid="${img.id}"] .img-caption`);
-                if (cap) cap.title = `已保存: ${img.savedAs}`;
-              }
-            })
-            .catch(() => {});
+      .then((urls) => {
+        const count = getImageCount();
+        // 该画面的第 k 张 ← urls[k]（若返回张数少于预期，只填有的）
+        for (let k = 0; k < count; k++) {
+          const base = i * count; // 该画面在扁平序列中的起始 idx
+          const img = state.images.find((x) => x.idx === base + k);
+          const url = urls[k];
+          if (img && url) {
+            img.status = 'done';
+            img.url = url;
+            if (count > 1 && urls.length > 1) img.caption = `${img.caption}（${k + 1}）`;
+            renderGalleryCard(img);
+            // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
+            fetch(`/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`)
+              .then((r) => {
+                const saved = r.headers.get('X-Saved-As');
+                if (saved) {
+                  img.savedAs = decodeURIComponent(saved);
+                  const cap = document.querySelector(`[data-imgid="${img.id}"] .img-caption`);
+                  if (cap) cap.title = `已保存: ${img.savedAs}`;
+                }
+              })
+              .catch(() => {});
+          } else if (img && !url) {
+            // 服务器只返回了部分图片
+            img.status = 'error';
+            img.error = '本张未返回（张数不足）';
+            renderGalleryCard(img);
+          }
         }
       })
       .catch((err) => {
-        const img = state.images.find((x) => x.idx === i);
-        if (img) {
-          img.status = 'error';
-          img.error = err.message;
-          renderGalleryCard(img);
+        const count = getImageCount();
+        const base = i * count;
+        for (let k = 0; k < count; k++) {
+          const img = state.images.find((x) => x.idx === base + k);
+          if (img) {
+            img.status = 'error';
+            img.error = err.message;
+            renderGalleryCard(img);
+          }
         }
       })
   );
@@ -1069,7 +1376,7 @@ async function generateColumn(skill, rawText, config) {
 
   try {
     const result = await callLLM(
-      SKILL_PROMPTS[skill],
+      getSkillPrompt(skill),
       rawText,
       config,
       // 正文回调
@@ -1216,7 +1523,8 @@ async function generate() {
   state.rawText = raw;
   state.images = [];
   showResultPage();
-  ['human-writing', 'humanizer-zh', 'ljg-plain'].forEach((s) => {
+  renderColumns(); // 按当前生效技能重建列 DOM
+  getActiveSkills().forEach((s) => {
     state.generated[s] = '';
     state.paragraphs[s] = [];
     $('col-' + s).innerHTML = '';
@@ -1232,7 +1540,7 @@ async function generate() {
   renderStitch();
   $('statusText').textContent = '三技能并行调用 LLM…';
 
-  const skills = ['human-writing', 'humanizer-zh', 'ljg-plain'];
+  const skills = getActiveSkills();
 
   // 文字生成
   const textPromises = skills.map((skill) => generateColumn(skill, raw, config));
@@ -1251,23 +1559,24 @@ async function generate() {
 
   const results = await Promise.allSettled(textPromises);
   const okCount = results.filter((r) => r.status === 'fulfilled' && r.value.ok).length;
+  const totalSkills = skills.length;
 
   if (imgEnabled && imgPromise) {
-    $('statusText').textContent = `文字完成 · ${okCount}/3 成功，配图生成中…`;
+    $('statusText').textContent = `文字完成 · ${okCount}/${totalSkills} 成功，配图生成中…`;
     await imgPromise;
   }
 
   const imgOk = state.images.filter((i) => i.status === 'done').length;
-  if (okCount === 3) {
+  if (okCount === totalSkills) {
     $('statusText').textContent = imgEnabled
-      ? `生成完成 · 文字 ${okCount}/3 + 配图 ${imgOk}/${state.images.length}`
+      ? `生成完成 · 文字 ${okCount}/${totalSkills} + 配图 ${imgOk}/${state.images.length}`
       : '生成完成 · 双击段落收入拼接区';
-    toast(imgEnabled ? `三版文字 + ${imgOk} 张配图已生成` : '三版已生成');
-    // 构建分段对比（原文标准分段 + 三列映射），不阻塞主流程
+    toast(imgEnabled ? `${totalSkills} 版文字 + ${imgOk} 张配图已生成` : `${totalSkills} 版已生成`);
+    // 构建分段对比（原文标准分段 + 各列映射），不阻塞主流程
     buildCompare(config);
   } else {
-    $('statusText').textContent = `完成 · ${okCount} 成功，${3 - okCount} 失败`;
-    toast(`${3 - okCount} 个技能调用失败`);
+    $('statusText').textContent = `完成 · ${okCount} 成功，${totalSkills - okCount} 失败`;
+    toast(`${totalSkills - okCount} 个技能调用失败`);
   }
 }
 
@@ -1408,7 +1717,7 @@ function renderStitch() {
         </div>`;
       }
       // text
-      const meta = SKILL_META[item.skill];
+      const meta = getSkillMeta(item.skill);
       if (item.editing) {
         return `<div class="stitch-card editing ${sel ? 'selected' : ''}" data-idx="${i}" draggable="false">
           <div class="s-tag"><span class="dot" style="background:${meta.color}"></span>${meta.label}</div>
@@ -1838,6 +2147,11 @@ window.openImageFolder = async function () {
   }
 };
 window.toggleTheme = toggleTheme;
+window.openSkillForm = openSkillForm;
+window.editCustomSkillForm = editCustomSkillForm;
+window.submitSkillForm = submitSkillForm;
+window.toggleCustomSkill = toggleCustomSkill;
+window.deleteCustomSkill = deleteCustomSkill;
 
 /* ===== 初始化 ===== */
 $('generateBtn').addEventListener('click', generate);
@@ -1866,8 +2180,42 @@ updateModelOptions();
 loadKey();
 checkSavedStitch();
 
+// 技能管理面板：初始渲染 + 折叠交互 + 面板计数
+renderSkillManager();
+(function initSkillManagerPanel() {
+  const head = $('skillManagerHead');
+  const body = $('skillManagerBody');
+  const caret = $('skillManagerCaret');
+  if (!head || !body) return;
+  const collapsed = localStorage.getItem('ww_skill_panel_collapsed') === '1';
+  body.style.display = collapsed ? 'none' : '';
+  if (caret) caret.textContent = collapsed ? '▸' : '▾';
+  head.addEventListener('click', () => {
+    const nowCollapsed = body.style.display !== 'none';
+    body.style.display = nowCollapsed ? 'none' : '';
+    if (caret) caret.textContent = nowCollapsed ? '▸' : '▾';
+    localStorage.setItem('ww_skill_panel_collapsed', nowCollapsed ? '1' : '0');
+  });
+  const updCount = () => {
+    const el = $('skillCount');
+    if (el) {
+      const n = getActiveSkills().length;
+      const total = BUILTIN_SKILLS.length + state.customSkills.length;
+      el.textContent = n === total ? `${n} 个技能` : `${n}/${total} 启用`;
+    }
+  };
+  updCount();
+  // 增删改启停后刷新计数：简单做法——钩在 renderSkillManager 尾部
+  const orig = renderSkillManager;
+  renderSkillManager = function () {
+    orig();
+    updCount();
+  };
+})();
+
 // 配图开关：仅在 imagifly cookie 已配置时显示
 if (IMAGIFLY_ENABLED && $('imgToggleRow')) {
   $('imgToggleRow').style.display = '';
   initImageModelSelect(); // 生图模型选择器与开关同显示
+  initImageExtraSelects(); // 尺寸/张数
 }
