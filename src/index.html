@@ -300,6 +300,14 @@
         <span class="skill-desc">你的终稿</span>
         <button class="btn btn-mini" onclick="exportText()">导出</button>
       </div>
+      <div class="article-meta" id="articleMetaBox">
+        <input id="articleTitle" class="am-title" placeholder="文章标题（生成后自动填入，可编辑）" oninput="onArticleMetaEdit()" />
+        <div class="am-row">
+          <span class="am-label">概要</span>
+          <input id="articleSummary" class="am-summary" placeholder="15~25 字概要（自动生成，可编辑）" oninput="onArticleMetaEdit()" />
+          <span class="am-count" id="amCount"></span>
+        </div>
+      </div>
       <div class="col-body" id="col-stitch">
         <div class="stitch-empty">双击左侧任意段落<br>或从配图库拖拽图片<br>将它们收入拼接区<br><br>拼接后可拖拽排序、编辑、导出</div>
       </div>

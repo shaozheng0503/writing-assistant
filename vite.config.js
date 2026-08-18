@@ -229,16 +229,17 @@ function imagiflyProxyPlugin(cookie) {
           else if (buf[0] === 0x47 && buf[1] === 0x49) { ct = 'image/gif'; ext = 'gif'; }
           else if (buf[0] === 0x52 && buf[1] === 0x49 && buf[8] === 0x57) { ct = 'image/webp'; ext = 'webp'; }
 
-          // 落盘：saved-images/序号-摘要.扩展名（失败不影响回传）
+          // 落盘：saved-images/[folder/]序号-摘要.扩展名（folder=文章文件夹；失败不影响回传）
           let savedName = '';
           if (wantSave) {
             try {
-              const dir = resolve(process.cwd(), 'saved-images');
+              const folder = (url.searchParams.get('folder') || '').replace(/[\\/:*?"<>|]+/g, '').substring(0, 50);
+              const dir = resolve(process.cwd(), 'saved-images', ...((folder && folder.length > 0 && folder !== '.') ? [folder] : []));
               if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
               const cap = (url.searchParams.get('caption') || '').replace(/[\\/:*?"<>|\s]+/g, '').substring(0, 24);
               const stamp = new Date().toISOString().replace(/[-:T]/g, '').substring(2, 14);
-              savedName = `${stamp}-${cap || 'image'}.${ext}`;
-              writeFileSync(join(dir, savedName), buf);
+              savedName = (folder ? folder + '/' : '') + `${stamp}-${cap || 'image'}.${ext}`;
+              writeFileSync(join(dir, `${stamp}-${cap || 'image'}.${ext}`), buf);
             } catch {}
           }
 
@@ -279,11 +280,13 @@ function imagiflyProxyPlugin(cookie) {
           const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
           const url = new URL(req.url, 'http://localhost');
           const cap = (url.searchParams.get('caption') || '').replace(/[\\/:*?"<>|\s]+/g, '').substring(0, 24);
+          const folder = (url.searchParams.get('folder') || '').replace(/[\\/:*?"<>|]+/g, '').substring(0, 50);
           const stamp = new Date().toISOString().replace(/[-:T]/g, '').substring(2, 14);
-          const savedName = `${stamp}-${cap || 'image'}.${ext}`;
-          const dir = resolve(process.cwd(), 'saved-images');
+          const fileName = `${stamp}-${cap || 'image'}.${ext}`;
+          const savedName = (folder ? folder + '/' : '') + fileName;
+          const dir = resolve(process.cwd(), 'saved-images', ...((folder && folder.length > 0 && folder !== '.') ? [folder] : []));
           if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-          writeFileSync(join(dir, savedName), buf);
+          writeFileSync(join(dir, fileName), buf);
           res.setHeader('Content-Type', 'application/json');
           res.setHeader('X-Saved-As', encodeURIComponent(savedName));
           res.end(JSON.stringify({ ok: true, savedName }));
@@ -295,7 +298,9 @@ function imagiflyProxyPlugin(cookie) {
 
       // 打开本地图片文件夹（资源管理器）
       server.middlewares.use('/imagifly-proxy/open-folder', async (req, res) => {
-        const dir = resolve(process.cwd(), 'saved-images');
+        const u = new URL(req.url, 'http://localhost');
+        const folder = (u.searchParams.get('folder') || '').replace(/[\\/:*?"<>|]+/g, '').substring(0, 50);
+        const dir = resolve(process.cwd(), 'saved-images', ...((folder && folder.length > 0 && folder !== '.') ? [folder] : []));
         try {
           if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
           if (process.platform === 'win32') {

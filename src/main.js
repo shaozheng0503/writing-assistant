@@ -18,16 +18,31 @@ import skillLjgPlain from '../skills/ljg-plain/SKILL.md?raw';
 /* imagifly 是否可用（.env 配置了 cookie 才开启） */
 const IMAGIFLY_ENABLED = !!import.meta.env.VITE_IMAGIFLY_ENABLED;
 
+/** 标题结构输出要求（三技能统一追加）：# 大标题 + ##/### 分层小节 */
+const TITLE_STRUCTURE_SUFFIX = `
+
+## 输出结构要求（必须遵守）
+1. 第一行输出一个大标题：\`# 文章标题\`（10~25 字，概括全文主旨，不要用书名号）
+2. 正文按内容逻辑用二级/三级标题分层：\`## 小节标题\`（主要层次）、\`### 子小节\`（更细层次），让结构一目了然
+3. 标题行独占一段（前后留空行），标题层级不要跳级（# 之后用 ##，不要直接 ###）
+4. 除标题外的正文段落照常改写，保持本 SKILL.md 的风格规则`;
+
 const SKILL_PROMPTS = {
   'human-writing':
     skillHumanWriting +
-    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。直接输出改写后的正文，不要输出标题、不要展示内部提纲、不要解释你做了什么。\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点（语气/口吻/关键改法），不要逐句分析原文，不要预写草稿。',
+    '\n\n## 当前任务\n你是 human-writing 技能。用户会给你一段文字，请按本 SKILL.md 的规则改写它。不要展示内部提纲、不要解释你做了什么。' +
+    TITLE_STRUCTURE_SUFFIX +
+    '\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点（语气/口吻/关键改法），不要逐句分析原文，不要预写草稿。',
   'humanizer-zh':
     skillHumanizerZh +
-    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的特征清单凭语感直接改写。输出要求：\n1. 只输出正文段落，禁止输出任何 markdown 标题（#、##）、禁止评分、禁止附更改总结\n2. 不要解释你做了什么\n\n## 思考约束（重要）\n你的思考过程必须在 300 字以内。禁止在思考中逐条对照特征清单、禁止逐句分析原文、禁止预写草稿。只快速记下 3~5 个命中要点（如「排比、空洞总结、破折号过多」），然后立刻开始写正文。',
+    '\n\n## 当前任务\n你是 humanizer-zh 技能。用户会给你一段文字，请按本 SKILL.md 的特征清单凭语感直接改写。禁止评分、禁止附更改总结，不要解释你做了什么。' +
+    TITLE_STRUCTURE_SUFFIX +
+    '\n\n## 思考约束（重要）\n你的思考过程必须在 300 字以内。禁止在思考中逐条对照特征清单、禁止逐句分析原文、禁止预写草稿。只快速记下 3~5 个命中要点（如「排比、空洞总结、破折号过多」），然后立刻开始写正文。',
   'ljg-plain':
     skillLjgPlain +
-    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。直接输出改写后的正文，不要写文件、不要附修改清单。\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。',
+    '\n\n## 当前任务\n你是 ljg-plain 技能。用户会给你一段文字，请按本 SKILL.md 的 9 条红线改写它，让一个 12 岁孩子能懂。不要写文件、不要附修改清单。' +
+    TITLE_STRUCTURE_SUFFIX +
+    '\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只圈出需要降维的术语和长句，不要解释每条红线，不要预写草稿。',
 };
 
 /* ===== 自定义技能数据层 ===== */
@@ -84,7 +99,9 @@ function getSkillMeta(skill) {
 
 /** 自定义技能的通用任务后缀：与内置技能同样的输出纪律 */
 const CUSTOM_TASK_SUFFIX = (name) =>
-  `\n\n## 当前任务\n你是「${name}」技能。用户会给你一段文字，请严格按上述规则改写它。输出要求：\n1. 直接输出改写后的正文，禁止输出任何 markdown 标题（#、##）、禁止评分、禁止附更改总结\n2. 不要解释你做了什么\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点，不要逐句分析原文，不要预写草稿。`;
+  `\n\n## 当前任务\n你是「${name}」技能。用户会给你一段文字，请严格按上述规则改写它。输出要求：\n1. 直接输出改写后的正文，禁止评分、禁止附更改总结\n2. 不要解释你做了什么` +
+  TITLE_STRUCTURE_SUFFIX +
+  `\n\n## 思考约束\n如果你有思考过程，请控制在 400 字以内：只快速确认改写要点，不要逐句分析原文，不要预写草稿。`;
 
 /** 技能 → system prompt（内置用 SKILL_PROMPTS，自定义用「用户提示词 + 任务后缀」运行时合成） */
 function getSkillPrompt(skill) {
@@ -1061,9 +1078,14 @@ function renderCompare() {
 
   const renderCell = (pid, pi, paras) => {
     const isSel = state.selectedPicks.has(pid);
+    const p = paras[pi] || '';
+    const hMatch = p.match(/^(#{1,3})\s+(.*)$/);
+    const bodyHtml = hMatch
+      ? `<p class="para-title lvl-${hMatch[1].length}">${escapeHtml(hMatch[2])}</p>`
+      : `<p>${escapeHtml(p)}</p>`;
     return `<div class="para-card cmp-card ${isSel ? 'selected' : ''}" data-pid="${pid}">
       <span class="pnum">${pi + 1}</span>
-      <p>${escapeHtml(paras[pi])}</p>
+      ${bodyHtml}
       <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
       <span class="pick-hint">双击收入拼接区</span>
     </div>`;
@@ -1523,6 +1545,94 @@ function refreshImgApiBadge() {
   }
 }
 
+/* ===== 文章标题 + 概要（终稿元信息） ===== */
+/**
+ * 快速模型基于原文生成「标题 + 15~25 字概要」候选，填入拼接区顶部（可编辑）。
+ * 用户编辑过（articleMeta.touched）则不覆盖。
+ */
+async function deriveArticleMeta(config) {
+  const systemPrompt = `你是一个文章元信息生成器。用户给你一篇文章原文，请生成：
+
+1. title：文章标题，10~25 字，准确概括主旨，有吸引力但不过度标题党，不用书名号
+2. summary：中文概要，15~25 字（务必在此区间），一句话概括文章核心内容
+
+输出格式严格为 JSON 对象，不要输出任何其他内容：
+{"title":"...","summary":"..."}`;
+
+  try {
+    const result = await callLLM(systemPrompt, state.rawText, { ...config, temperature: 0.4 }, () => {});
+    const m = (result.text || '').match(/\{[\s\S]*\}/);
+    if (m) {
+      const obj = JSON.parse(m[0]);
+      if (obj && obj.title && obj.summary) {
+        return { title: String(obj.title).trim().slice(0, 40), summary: String(obj.summary).trim().slice(0, 40) };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+/** 文章元信息状态（touched=true 表示用户手动编辑过，自动生成不再覆盖） */
+const articleMeta = { title: '', summary: '', generating: false, touched: false };
+
+/** 更新拼接区头部的标题/概要输入框 */
+function renderArticleMeta() {
+  const t = $('articleTitle');
+  const s = $('articleSummary');
+  if (t) t.value = articleMeta.title;
+  if (s) s.value = articleMeta.summary;
+  updateAmCount();
+}
+
+/** 生成流水线的一环：三列文字启动后并行跑，完成后填入（不阻塞主流程） */
+function startArticleMetaPipeline(config) {
+  articleMeta.title = '';
+  articleMeta.summary = '';
+  articleMeta.touched = false;
+  articleMeta.generating = true;
+  renderArticleMeta();
+  const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
+  deriveArticleMeta(fastConfig)
+    .then((meta) => {
+      if (meta && !articleMeta.touched) {
+        articleMeta.title = meta.title;
+        articleMeta.summary = meta.summary;
+        renderArticleMeta();
+      }
+    })
+    .catch(() => {})
+    .finally(() => { articleMeta.generating = false; });
+}
+
+/** 用户编辑标题/概要 → 标记 touched 并暂存（随 stitch 一起持久化） */
+function onArticleMetaEdit() {
+  articleMeta.title = $('articleTitle').value;
+  articleMeta.summary = $('articleSummary').value;
+  articleMeta.touched = true;
+  updateAmCount();
+}
+
+/** 概要字数提示：15~25 字为达标区间 */
+function updateAmCount() {
+  const el = $('amCount');
+  const s = $('articleSummary');
+  if (!el || !s) return;
+  const n = [...s.value].length;
+  el.textContent = n ? `${n} 字` : '';
+  el.style.color = n >= 15 && n <= 25 ? 'var(--c4)' : (n ? 'var(--c5)' : 'var(--text-dim)');
+}
+
+/** 获取文章文件夹名：标题（清理非法字符）+ 时间戳；标题为空回退「未命名」 */
+function getArticleFolderName() {
+  const safe = (articleMeta.title || '')
+    .replace(/[\\/:*?"<>|\s]+/g, '')
+    .substring(0, 30);
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  const stamp = `${String(now.getFullYear()).slice(2)}${pad(now.getMonth() + 1)}${pad(now.getDate())}${pad(now.getHours())}${pad(now.getMinutes())}`;
+  return `${safe || '未命名文章'}-${stamp}`;
+}
+
 /* ===== Imagifly 配图生成 ===== */
 
 /**
@@ -1540,12 +1650,12 @@ async function deriveImagePrompts(rawText, config) {
 3. 为每个部分构思一个与该部分内容紧密相关的画面描述：画面要能具体呈现该部分的场景/主体/氛围，而不是泛泛的文章主题插图
 
 输出格式严格为 JSON 数组（恰好 N 个元素，按文章顺序），不要输出任何其他内容：
-[{"segment":"该部分内容的中文摘要(20字内)","prompt":"english image description for this specific part, under 60 words, including subject, composition, style, lighting, color tone"}]
+[{"segment":"该部分内容的中文摘要(20字内)","prompt":"该部分画面的中文描述，40~80字，包含主体、构图、风格、光线、色调"}]
 
 要求：
 - 每张图的 prompt 必须体现其对应部分的独特内容（场景、主体、动作或意象），禁止多张图共用同一画面
 - N 张图在构图（特写/全景/俯视/侧写）、视角、光线氛围上要有明显差异，避免雷同
-- prompt 必须纯英文，包含主体、构图、风格、光线、色调
+- prompt 必须纯中文，包含主体、构图、风格、光线、色调
 - segment 是该部分内容的中文摘要
 - 不要输出任何解释、标题、代码块标记`;
 
@@ -1954,10 +2064,11 @@ async function generateAllImages(prompts, config) {
           img.url = url;
           img.generatedAt = Date.now();
           renderGalleryCard(img);
-          // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
+          // 自动落盘到本地 saved-images/<文章文件夹>/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
+          const folder = encodeURIComponent(getArticleFolderName());
           const saveUrl = url.startsWith('data:')
-            ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
-            : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
+            ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}&folder=${folder}`
+            : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}&folder=${folder}`;
           const saveBody = url.startsWith('data:') ? url : null;
           fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
             .then((r) => {
@@ -2025,7 +2136,7 @@ function renderGalleryCard(img) {
     const proxyUrl = `/imagifly-proxy/image?url=${encodeURIComponent(img.url)}`;
     card.innerHTML = `
       <div class="img-wrap"><img src="${proxyUrl}" alt="${escapeHtml(img.caption)}" /></div>
-      <div class="regen-spin"><div class="dots"><span></span><span></span><span></span></div>重新生成中…</div>
+      <div class="img-regen-spin"><div class="dots"><span></span><span></span><span></span></div>重新生成中…</div>
       <div class="img-meta"><div class="img-caption">${escapeHtml(img.caption)}</div></div>
       <span class="img-idx">${img.idx + 1}</span>
       <span class="img-drag-hint">拖拽到拼接区</span>
@@ -2148,8 +2259,8 @@ async function regenerateSingleImage(img, newPrompt) {
     toast(`第 ${img.idx + 1} 张已重新生成`);
     // 新图落盘
     const saveUrl = url.startsWith('data:')
-      ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
-      : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
+      ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}&folder=${encodeURIComponent(getArticleFolderName())}`
+      : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}&folder=${encodeURIComponent(getArticleFolderName())}`;
     const saveBody = url.startsWith('data:') ? url : null;
     fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
       .then((r) => {
@@ -2311,11 +2422,9 @@ async function generateColumn(skill, rawText, config) {
     }
 
     state.generated[skill] = result.text;
-    // 剥离 markdown 标题行再分段：某些模型无视「不要输出标题」的指令，
-    // 标题行若混入段落会干扰分段对比的对齐
-    state.paragraphs[skill] = splitParagraphs(
-      result.text.replace(/^#{1,6}\s+.*$/gm, '').trim()
-    );
+    // 分段：标题行（# 大标题 / ##/### 小节）保留并独立成段
+    // （旧版剥离 markdown 标题是因为技能被禁止输出标题；现在结构化输出是产品要求）
+    state.paragraphs[skill] = splitParagraphs(result.text.trim());
     if (streamCard) streamCard.classList.remove('cursor-blink');
     renderColumnCards(skill);
     return { ok: true };
@@ -2359,9 +2468,14 @@ function renderColumnCards(skill) {
           <span class="stub-text">段落 ${i + 1} 已隐藏 · 点击恢复</span>
         </div>`;
       }
+      // 标题段（段首 # / ## / ### 标题，标题后可紧跟正文）：标题加粗强调
+      const hMatch = p.match(/^(#{1,3})\s+([^\n]+)/);
+      const titleHtml = hMatch
+        ? `<p class="para-title lvl-${hMatch[1].length}">${escapeHtml(hMatch[2])}</p>`
+        : `<p>${escapeHtml(p)}</p>`;
       return `<div class="para-card ${isSel ? 'selected' : ''}" data-pid="${pid}" data-pidx="${i}"${secStyle}>
         <span class="pnum">${i + 1}</span>${secBadge}
-        <p>${escapeHtml(p)}</p>
+        ${titleHtml}
         <span class="copy-btn" onclick="event.stopPropagation();copyText('${pid}')">复制</span>
         <span class="hide-btn" onclick="event.stopPropagation();toggleCardHidden('${pid}')" title="隐藏此段落（调试聚焦）">隐</span>
         <span class="pick-hint">双击收入拼接区</span>
@@ -2451,6 +2565,8 @@ async function generate() {
   // 原文分段前置启动：deriveSections 只依赖原文，与三列文字并行跑，
   // 吃掉原先「等三列完成才开始分段」的 20s+ 串行窗口
   startSectionPipeline(config);
+  // 文章标题+概要：与三列文字并行生成（快速模型），完成自动填入拼接区顶部
+  startArticleMetaPipeline(config);
 
   // 文字生成：每列完成即尝试对齐（配合前置分段形成流水线）
   const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
@@ -2661,7 +2777,7 @@ function renderStitch() {
       }
       return `<div class="stitch-card ${sel ? 'selected' : ''}" data-idx="${i}" draggable="true">
         <div class="s-tag"><span class="drag-handle">⋮⋮</span><span class="dot" style="background:${meta.color}"></span>${meta.label}</div>
-        <p>${escapeHtml(item.text)}</p>
+        ${/^(#{1,3})\s+/.test(item.text) ? `<p class="para-title lvl-${item.text.match(/^#+/)[0].length}">${escapeHtml(item.text.replace(/^#+\s+/, ''))}</p>` : `<p>${escapeHtml(item.text)}</p>`}
         <div class="s-actions">
           <span class="s-act" onclick="event.stopPropagation();editStitch(${i})">编辑</span>
           <span class="s-act" onclick="event.stopPropagation();removeItem(${i})">✕</span>
@@ -2836,6 +2952,10 @@ function clearStitch() {
 /* ===== 自动存稿（带恢复确认） ===== */
 function saveStitch() {
   localStorage.setItem('ww_stitch', JSON.stringify(state.stitch));
+  // 文章元信息（标题/概要）随拼接稿一起持久化
+  localStorage.setItem('ww_article_meta', JSON.stringify({
+    title: articleMeta.title, summary: articleMeta.summary, touched: articleMeta.touched,
+  }));
 }
 /**
  * 启动时检测上次存稿。有的话不直接塞回页面，而是弹确认条：
@@ -2855,6 +2975,17 @@ function checkSavedStitch() {
   bar.style.display = 'flex';
   window.__resumeStitch = () => {
     state.stitch = saved;
+    // 恢复文章元信息
+    try {
+      const meta = JSON.parse(localStorage.getItem('ww_article_meta') || 'null');
+      if (meta) {
+        articleMeta.title = meta.title || '';
+        articleMeta.summary = meta.summary || '';
+        articleMeta.touched = true; // 恢复的视为已确认内容，不被新生成覆盖
+        renderArticleMeta();
+        updateAmCount();
+      }
+    } catch {}
     renderStitch();
     bar.style.display = 'none';
     toast('已恢复上次的拼接稿');
@@ -2897,14 +3028,26 @@ async function buildExportPayload() {
   return items;
 }
 
-/** 物料 → 三种格式的字符串 */
+/** 物料 → 三种格式的字符串（头部带标题+概要，如已填写） */
+function metaHeaderPlain() {
+  const parts = [];
+  if (articleMeta.title) parts.push(`# ${articleMeta.title}`);
+  if (articleMeta.summary) parts.push(`> ${articleMeta.summary}`);
+  return parts.length ? parts.join('\n\n') + '\n\n' : '';
+}
+function metaHeaderHtml() {
+  let h = '';
+  if (articleMeta.title) h += `<h1>${escapeHtml(articleMeta.title)}</h1>\n`;
+  if (articleMeta.summary) h += `<p class="doc-summary">${escapeHtml(articleMeta.summary)}</p>\n`;
+  return h;
+}
 function payloadToPlain(items) {
-  return items
+  return metaHeaderPlain() + items
     .map((it) => (it.type === 'image' ? `[图片: ${it.caption || '配图'}]` : it.text))
     .join('\n\n');
 }
 function payloadToMarkdown(items) {
-  return items
+  return metaHeaderPlain() + items
     .map((it) => {
       if (it.type === 'image') {
         const alt = (it.caption || '配图').replace(/[[\]]/g, ' ');
@@ -2915,6 +3058,12 @@ function payloadToMarkdown(items) {
     .join('\n\n');
 }
 function payloadToHtml(items) {
+  // 标题段转换：# → h1，## → h2，### → h3（标题在纯文本里已是独立段落）
+  const renderText = (text) => {
+    const h = text.match(/^(#{1,3})\s+(.*)$/);
+    if (h) return `<h${h[1].length}>${escapeHtml(h[2])}</h${h[1].length}>`;
+    return `<p>${escapeHtml(text).replace(/\n/g, '<br>')}</p>`;
+  };
   const body = items
     .map((it) => {
       if (it.type === 'image') {
@@ -2922,7 +3071,7 @@ function payloadToHtml(items) {
         const src = it.dataUrl || it.src || '';
         return `<figure><img src="${src}" alt="${cap}" /><figcaption>${cap}</figcaption></figure>`;
       }
-      return `<p>${escapeHtml(it.text).replace(/\n/g, '<br>')}</p>`;
+      return renderText(it.text);
     })
     .join('\n');
   return `<!DOCTYPE html>
@@ -2930,18 +3079,23 @@ function payloadToHtml(items) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>导出终稿</title>
+<title>${escapeHtml(articleMeta.title || '导出终稿')}</title>
 <style>
   body { max-width: 720px; margin: 40px auto; padding: 0 20px;
     font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
     font-size: 16px; line-height: 1.9; color: #1f2733; }
   p { margin: 0 0 1.2em; }
+  h1 { font-size: 26px; margin: 1.4em 0 .8em; line-height: 1.4; }
+  h2 { font-size: 21px; margin: 1.4em 0 .7em; }
+  h3 { font-size: 18px; margin: 1.2em 0 .6em; color: #33404f; }
+  .doc-summary { font-size: 14px; color: #5a6678; border-left: 3px solid #c8d2e0; padding-left: 12px; }
   figure { margin: 1.6em 0; text-align: center; }
   figure img { max-width: 100%; border-radius: 8px; }
   figcaption { font-size: 13px; color: #5a6678; margin-top: 8px; }
 </style>
 </head>
 <body>
+${metaHeaderHtml()}
 ${body}
 </body>
 </html>`;
@@ -2993,7 +3147,9 @@ function openExportModal() {
     .map((s) =>
       s.type === 'image'
         ? `<figure class="ep-figure"><img src="${escapeHtml(s.src || '')}" alt="${escapeHtml(s.caption || '配图')}" loading="lazy" /><figcaption>${escapeHtml(s.caption || '配图')}</figcaption></figure>`
-        : `<p class="ep-p">${escapeHtml(s.text.substring(0, 400))}${s.text.length > 400 ? '…' : ''}</p>`
+        : (/^(#{1,3})\s+/.test(s.text)
+            ? (() => { const m = s.text.match(/^(#{1,3})\s+(.*)$/); return `<div class="ep-p ep-title lvl-${m[1].length}">${escapeHtml(m[2])}</div>`; })()
+            : `<p class="ep-p">${escapeHtml(s.text.substring(0, 400))}${s.text.length > 400 ? '…' : ''}</p>`)
     )
     .join('');
   preview.style.setProperty('--ep-fs', fs + 'px');
@@ -3028,13 +3184,20 @@ async function doExport(kind) {
     if (kind === 'rich') {
       btn.textContent = '正在内嵌图片…';
       const items = await buildExportPayload();
-      // 富文本片段：dataURL 图片 + 分段文本，粘贴到公众号/知乎/Word 图文混排
-      const html = items
-        .map((it) =>
-          it.type === 'image'
-            ? `<figure><img src="${it.dataUrl || it.src || ''}" alt="${escapeHtml(it.caption || '')}" /><figcaption>${escapeHtml(it.caption || '')}</figcaption></figure>`
-            : `<p>${escapeHtml(it.text).replace(/\n/g, '<br>')}</p>`
-        )
+      // 富文本片段：标题+概要头部 + dataURL 图片 + 分段文本（标题转 h1/h2/h3），粘贴到公众号/知乎/Word
+      let html = '';
+      if (articleMeta.title) html += `<h1>${escapeHtml(articleMeta.title)}</h1>`;
+      if (articleMeta.summary) html += `<p style="color:#5a6678;font-size:14px;border-left:3px solid #c8d2e0;padding-left:12px;">${escapeHtml(articleMeta.summary)}</p>`;
+      html += items
+        .map((it) => {
+          if (it.type === 'image') {
+            return `<figure><img src="${it.dataUrl || it.src || ''}" alt="${escapeHtml(it.caption || '')}" /><figcaption>${escapeHtml(it.caption || '')}</figcaption></figure>`;
+          }
+          const h = it.text.match(/^(#{1,3})\s+(.*)$/);
+          return h
+            ? `<h${h[1].length}>${escapeHtml(h[2])}</h${h[1].length}>`
+            : `<p>${escapeHtml(it.text).replace(/\n/g, '<br>')}</p>`;
+        })
         .join('');
       btn.textContent = '复制中…';
       const res = await copyWithHtml(payloadToPlain(items), html);
@@ -3085,9 +3248,11 @@ window.switchView = switchView;
 window.addCompareRowToStitch = addCompareRowToStitch;
 window.openImageFolder = async function () {
   try {
-    const r = await fetch('/imagifly-proxy/open-folder');
+    // 优先打开当前文章的子文件夹（有标题时）；无标题回退 saved-images 根目录
+    const folder = articleMeta.title ? encodeURIComponent(getArticleFolderName()) : '';
+    const r = await fetch(`/imagifly-proxy/open-folder${folder ? `?folder=${folder}` : ''}`);
     const d = await r.json();
-    if (d.ok) toast('已打开 saved-images 文件夹');
+    if (d.ok) toast(`已打开 ${d.dir.includes('saved-images') ? d.dir.split(/[\\/]/).pop() : '图片'}文件夹`);
     else toast('打开失败');
   } catch {
     toast('打开失败');
@@ -3095,6 +3260,7 @@ window.openImageFolder = async function () {
 };
 window.toggleTheme = toggleTheme;
 window.adjustReadingFs = adjustReadingFs;
+window.onArticleMetaEdit = onArticleMetaEdit;
 window.toggleCardHidden = toggleCardHidden;
 window.unhideAllCards = unhideAllCards;
 window.toggleSyncScroll = toggleSyncScroll;

@@ -538,9 +538,29 @@ body{
   padding:16px 18px;display:flex;flex-direction:column;gap:12px;background:var(--surface);
 }
 .ep-p{font-size:var(--ep-fs,15px);line-height:2.0;color:var(--text);letter-spacing:.2px;margin:0}
+.ep-title{font-weight:700;line-height:1.5;margin:2px 0}
+.ep-title.lvl-1{font-size:calc(var(--ep-fs,15px) * 1.5)}
+.ep-title.lvl-2{font-size:calc(var(--ep-fs,15px) * 1.28)}
+.ep-title.lvl-3{font-size:calc(var(--ep-fs,15px) * 1.12);color:var(--text-dim)}
+
+/* 段落卡标题样式（# 大标题 / ##/### 小节标题独立成卡时） */
+.para-card .para-title{font-weight:700;line-height:1.55;margin:0}
+.para-card .para-title.lvl-1{font-size:1.35em}
+.para-card .para-title.lvl-2{font-size:1.18em}
+.para-card .para-title.lvl-3{font-size:1.06em;color:var(--text-dim)}
 .ep-figure{margin:0;text-align:center}
 .ep-figure img{max-width:100%;max-height:180px;border-radius:8px;box-shadow:var(--shadow-sm)}
 .ep-figure figcaption{font-size:var(--fs-xs);color:var(--text-dim);margin-top:6px}
+
+/* ===== 拼接区头部：文章标题 + 概要 ===== */
+.article-meta{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;flex-direction:column;gap:8px;background:var(--surface2)}
+.am-title{width:100%;border:1px solid var(--border);border-radius:8px;padding:7px 10px;font-size:15px;font-weight:700;color:var(--text);background:var(--surface)}
+.am-title:focus{outline:none;border-color:var(--accent)}
+.am-row{display:flex;align-items:center;gap:8px}
+.am-label{font-size:var(--fs-xs);color:var(--text-dim);flex:none;font-weight:600}
+.am-summary{flex:1;min-width:0;border:1px solid var(--border);border-radius:8px;padding:6px 10px;font-size:13px;color:var(--text);background:var(--surface)}
+.am-summary:focus{outline:none;border-color:var(--accent)}
+.am-count{font-size:11px;color:var(--text-dim);flex:none;min-width:38px;text-align:right;font-variant-numeric:tabular-nums}
 
 /* ===== IMAGE TOGGLE ===== */
 .img-toggle-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:4px 0}
