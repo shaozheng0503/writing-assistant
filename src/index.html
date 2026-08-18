@@ -77,12 +77,16 @@
       <button class="btn btn-primary" id="generateBtn">生成三版</button>
     </div>
 
-    <!-- 配图开关 -->
+    <!-- 配图开关 + 生图模型选择 -->
     <div class="img-toggle-row" id="imgToggleRow" style="display:none">
       <label class="img-toggle">
         <input type="checkbox" id="imgToggle" checked>
         <span class="toggle-track"><span class="toggle-thumb"></span></span>
         <span class="toggle-label">同时生成 3~5 张配图</span>
+      </label>
+      <label class="img-model-pick">
+        <span class="img-model-label">生图模型</span>
+        <select id="imgModelSelect" title="切换后立即生效，下次生图即用新模型"></select>
       </label>
       <span class="img-hint">从原文分段提取画面描述，调用 Imagifly 生成插图，可拖拽到拼接区</span>
     </div>

@@ -410,6 +410,14 @@ body{
 .img-toggle input:checked ~ .toggle-track .toggle-thumb{left:19px}
 .toggle-label{font-size:14px;color:var(--text);font-weight:600}
 .img-hint{font-size:var(--fs-xs);color:var(--text-dim)}
+.img-model-pick{display:flex;align-items:center;gap:8px}
+.img-model-label{font-size:14px;color:var(--text);font-weight:600}
+#imgModelSelect{
+  background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
+  border-radius:8px;padding:5px 10px;font-size:13px;font-family:inherit;cursor:pointer;
+  box-shadow:var(--shadow-sm);max-width:250px;
+}
+#imgModelSelect:focus{outline:none;border-color:var(--accent)}
 
 /* ===== VIEW SWITCH（视图切换） ===== */
 .view-switch{display:flex;gap:0;background:var(--surface2);border:1px solid var(--border-strong);border-radius:10px;padding:2px}

@@ -683,6 +683,44 @@ async function deriveImagePrompts(rawText, config) {
 }
 
 /**
+ * 可用生图模型表（slug 与人类可读标签）。
+ * slug 来源：imagifly.net 控制台观测（见 imagifly-batch 技能沉淀）。
+ * Qwen-Image-Edit 是图生图模型，纯文生图场景不适用，故不列入。
+ */
+const IMAGE_MODELS = [
+  { slug: 'nano-banana-2', label: 'nano-banana-2 · 综合质量好（默认）' },
+  { slug: 'gpt-image-2', label: 'gpt-image-2 · 海报/含文字图' },
+  { slug: 'Z-Image-Turbo', label: 'Z-Image-Turbo · 快速' },
+  { slug: 'Wai-SDXL', label: 'Wai-SDXL · 二次元/插画' },
+  { slug: 'grok-imagine-image-quality', label: 'grok-imagine · 高质量(易限流)' },
+];
+const DEFAULT_IMAGE_MODEL = 'nano-banana-2';
+
+/** 读用户选择的生图模型（localStorage 持久化；未配置/失效值回退默认） */
+function getImageModel() {
+  const saved = localStorage.getItem('ww_img_model');
+  return IMAGE_MODELS.some((m) => m.slug === saved) ? saved : DEFAULT_IMAGE_MODEL;
+}
+function setImageModel(slug) {
+  if (!IMAGE_MODELS.some((m) => m.slug === slug)) return false;
+  localStorage.setItem('ww_img_model', slug);
+  return true;
+}
+
+/** 生图模型选择下拉框初始化（切换即时生效——generateImage 每次现读配置） */
+function initImageModelSelect() {
+  const sel = $('imgModelSelect');
+  if (!sel) return;
+  sel.innerHTML = IMAGE_MODELS.map(
+    (m) => `<option value="${m.slug}"${m.slug === getImageModel() ? ' selected' : ''}>${m.label}</option>`
+  ).join('');
+  sel.addEventListener('change', () => {
+    setImageModel(sel.value);
+    toast(`生图模型已切换: ${sel.value}`);
+  });
+}
+
+/**
  * 提交生图请求 → 轮询 → 返回图片 URL
  */
 async function generateImage(prompt) {
@@ -691,7 +729,7 @@ async function generateImage(prompt) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       prompt,
-      model: 'nano-banana-2',
+      model: getImageModel(), // 用户可配置，未配置回退 nano-banana-2
       size: '1368x768',
       imageCount: 1,
     }),
@@ -1671,4 +1709,5 @@ checkSavedStitch();
 // 配图开关：仅在 imagifly cookie 已配置时显示
 if (IMAGIFLY_ENABLED && $('imgToggleRow')) {
   $('imgToggleRow').style.display = '';
+  initImageModelSelect(); // 生图模型选择器与开关同显示
 }
