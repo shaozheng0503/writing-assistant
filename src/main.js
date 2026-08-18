@@ -619,27 +619,116 @@ ${paraList}
 }
 
 /**
- * 构建对比数据：原文标准分段 + 各 skill 段落映射。
- * 在三列文字都完成后调用。
+ * 分段对比流水线（可感知版）：
+ * - startSectionPipeline：点生成立即启动原文分段（只依赖原文，与三列文字并行，
+ *   吃掉原先串行等待的 20s+ 空闲窗口）
+ * - onColumnTextDone：某列文字完成且分段就绪 → 立即对齐该列（不等其他列），
+ *   某列失败不拖累其他列
+ * - 进度 UI：顶栏 cmpProgress 组件（分段中 → 对齐中 n/N → 就绪），
+ *   对比视图按钮构建期间 loading、就绪后点亮
  */
-async function buildCompare(config) {
+const comparePipeline = {
+  sections: null,       // deriveSections 结果（原文分段）
+  sectionsError: null,
+  assigns: {},          // skill → number[]
+  skills: [],           // 本轮参与的技能
+  done: new Set(),      // 已完成对齐的技能
+  finished: false,
+};
+
+/** 顶栏分段对比进度组件：分段中 / 对齐中 n/N / 就绪 */
+function updateCompareProgress() {
+  const chip = $('cmpProgress');
+  if (!chip) return;
+  const N = comparePipeline.skills.length;
+  if (state.compare) {
+    chip.style.display = 'none';
+    return;
+  }
+  if (comparePipeline.sectionsError) {
+    chip.style.display = 'none';
+    return;
+  }
+  chip.style.display = '';
+  const bar = chip.querySelector('.cmp-bar');
+  const label = chip.querySelector('.cmp-label');
+  const spin = chip.querySelector('.cmp-spin');
+  if (!comparePipeline.sections) {
+    label.textContent = '分段对比：分析原文结构…';
+    bar.style.width = `${Math.round((comparePipeline.done.size / Math.max(1, N)) * 30)}%`;
+  } else if (comparePipeline.done.size < N) {
+    label.textContent = `分段对比：对齐中 ${comparePipeline.done.size}/${N} 列`;
+    bar.style.width = `${30 + Math.round((comparePipeline.done.size / Math.max(1, N)) * 70)}%`;
+  } else {
+    label.textContent = '分段对比：就绪';
+    bar.style.width = '100%';
+    if (spin) spin.style.display = 'none';
+  }
+}
+
+/** 流水线入口：与三列文字并行启动原文分段 */
+function startSectionPipeline(config) {
+  comparePipeline.sections = null;
+  comparePipeline.sectionsError = null;
+  comparePipeline.assigns = {};
+  comparePipeline.skills = getActiveSkills();
+  comparePipeline.done = new Set();
+  comparePipeline.finished = false;
+  state.compare = null;
   state.compareBuilding = true;
   updateCompareUI();
-  const prevStatus = $('statusText').textContent;
-  $('statusText').textContent = '正在构建分段对比（快速模型，几秒~十几秒）…';
+  updateCompareProgress();
+  const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
+  deriveSections(state.rawText, fastConfig)
+    .then((sections) => {
+      comparePipeline.sections = sections;
+      // 此前已完成的列可能还在等分段 → 现在逐列补齐
+      comparePipeline.skills.forEach((sk) => {
+        if (state.paragraphs[sk] && state.paragraphs[sk].length > 0) alignColumnPipeline(sk, fastConfig);
+      });
+    })
+    .catch((err) => {
+      console.error('原文分段失败:', err);
+      comparePipeline.sectionsError = err;
+      finishComparePipeline(); // 失败走静默降级（等价旧 catch）
+    });
+}
+
+/** 对齐单列（分段就绪 + 该列文字完成后调用） */
+async function alignColumnPipeline(skill, fastConfig) {
+  if (!comparePipeline.sections) return;
+  if (comparePipeline.assigns[skill]) return; // 已对齐（regenerate 除外）
   try {
-    // 分段/对齐是结构化小任务，强制用快速非推理模型，
-    // 避免用户选了推理模型（如 glm-5）后对比构建慢到像卡死
-    const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
-    const sections = await deriveSections(state.rawText, fastConfig);
-    const assigns = {};
-    for (const skill of getActiveSkills()) {
-      const paras = state.paragraphs[skill];
-      assigns[skill] =
-        paras.length > 0 ? await alignSkillToSections(sections, paras, fastConfig) : [];
-    }
-    state.compare = { sections, assigns };
-    // 重渲染技能列：卡片按标准段着色 + 列头加当前段指示 + 绑定同步滚动
+    comparePipeline.assigns[skill] = await alignSkillToSections(
+      comparePipeline.sections,
+      state.paragraphs[skill],
+      fastConfig
+    );
+  } catch {
+    // 对齐失败 → 顺序平均分配兜底（与 alignSkillToSections 内部兜底一致）
+    const secs = comparePipeline.sections;
+    const paras = state.paragraphs[skill];
+    comparePipeline.assigns[skill] = paras.map((_, i) =>
+      secs.length === 1 ? 0 : Math.min(Math.floor((i / paras.length) * secs.length), secs.length - 1)
+    );
+  }
+  comparePipeline.done.add(skill);
+  updateCompareProgress();
+  finishComparePipeline();
+}
+
+/** 全部列对齐完成（或分段失败）→ 落地 compare 状态并渲染 */
+function finishComparePipeline() {
+  const N = comparePipeline.skills.length;
+  const allDone = comparePipeline.sections && comparePipeline.done.size >= N;
+  const failed = !!comparePipeline.sectionsError;
+  if (!allDone && !failed) return;
+  if (comparePipeline.finished) return;
+  comparePipeline.finished = true;
+  state.compareBuilding = false;
+
+  if (allDone) {
+    state.compare = { sections: comparePipeline.sections, assigns: comparePipeline.assigns };
     getActiveSkills().forEach((s) => {
       renderColumnCards(s);
       const head = $('col-' + s).previousElementSibling;
@@ -651,17 +740,15 @@ async function buildCompare(config) {
       }
     });
     bindSyncScroll();
-    $('statusText').textContent = `${prevStatus} · 分段对比就绪（三列已同步联动）`;
+    const st = $('statusText');
+    if (st && !st.textContent.includes('分段对比')) st.textContent += ' · 分段对比就绪（三列已同步联动）';
     toast('分段对比已就绪');
-  } catch (err) {
-    console.error('分段对比构建失败:', err);
+  } else {
     state.compare = null;
-    $('statusText').textContent = prevStatus;
     toast('分段对比构建失败');
-  } finally {
-    state.compareBuilding = false;
-    updateCompareUI();
   }
+  updateCompareProgress();
+  updateCompareUI();
 }
 
 /** 对比视图 / 自由视图切换 */
@@ -670,15 +757,19 @@ function switchView(mode) {
   updateCompareUI();
 }
 
-/* ===== 三列同步滚动（自由视图，基于分段对齐映射） ===== */
+/* ===== 三列同步滚动（自由视图，基于分段对齐映射 + 段内插值） ===== */
 /**
- * 滚动任一列 → 由该列当前顶部可见段落反查所属标准段 → 其余两列滚到
- * 该标准段的首张卡片。双向联动：任一列都能作为驱动方。
- * - 仅在 compare 数据就绪 + 自由视图下生效
- * - syncLock 防级联触发（程序滚动也会触发 scroll 事件）
- * - 用户滚到底部时驱动其余列也到底部（阅读长段时的自然预期）
+ * 滚动任一列 → 由该列当前可见段落反查所属标准段 → 其余列滚动到该标准段的
+ * 对应位置。双向联动：任一列都能作为驱动方。
+ * - 仅在自由视图下生效；compare 就绪走「段内插值」连续跟踪，未就绪走像素级比例兜底
+ * - 驱动者锁：syncScroll.driver 记录当前用户正在滚的列，跟随列程序滚动的回声
+ *   事件直接忽略，用户列的事件永不丢弃（旧全局锁在拖拽时会丢源列事件，导致
+ *   快速拖到底时其他列跟不上的体验问题）
+ * - 段内插值：源列可见卡在段内进度 p → 目标列定位到同段卡片区间的相同比例处，
+ *   连续跟随而非一格一格跳段首
+ * - -1 段（新增内容）就近映射到相邻已对齐段，不再冻结同步
  */
-const syncScroll = { locked: false, raf: null };
+const syncScroll = { driver: null, clearTimer: null, raf: null };
 
 /** 同步滚动开关（默认开，可临时关闭自由浏览） */
 function isSyncScrollOn() {
@@ -702,87 +793,128 @@ function bindSyncScroll() {
     if (!el || el.dataset.syncBound) return;
     el.dataset.syncBound = '1';
     el.addEventListener('scroll', () => {
-      if (syncScroll.locked || state.viewMode !== 'free' || !isSyncScrollOn()) return;
-      syncScroll.locked = true;
+      if (state.viewMode !== 'free' || !isSyncScrollOn()) return;
+      // 驱动者锁：跟随列程序滚动的回声事件忽略；用户正在交互的列（含
+      // 尚无 driver 的第一个事件）永不忽略——快速拖拽不丢事件
+      if (syncScroll.driver && syncScroll.driver !== skill) return;
+      syncScroll.driver = skill;
+      if (syncScroll.clearTimer) clearTimeout(syncScroll.clearTimer);
+      // 滚动停止 120ms 后释放驱动权，允许换列驱动
+      syncScroll.clearTimer = setTimeout(() => { syncScroll.driver = null; }, 120);
       if (syncScroll.raf) cancelAnimationFrame(syncScroll.raf);
       syncScroll.raf = requestAnimationFrame(() => driveSyncScroll(skill));
     });
   });
 }
 
-/** 以 skill 列的当前视口为驱动，同步其余列 */
+/** 卡片相对列容器的几何位置（getBoundingClientRect 相对测量，不依赖 offsetParent 链） */
+function cardRectIn(colEl, card) {
+  const colTop = colEl.getBoundingClientRect().top;
+  const r = card.getBoundingClientRect();
+  return { top: r.top - colTop + colEl.scrollTop, bottom: r.bottom - colTop + colEl.scrollTop };
+}
+
+/** 找源列视口顶部附近的可见卡片（probe 往下 40px 容差） */
+function findVisibleCard(colEl) {
+  const cards = Array.from(colEl.querySelectorAll('.para-card'));
+  if (cards.length === 0) return null;
+  const probe = colEl.scrollTop + 40;
+  let vis = null;
+  for (const c of cards) {
+    const { top, bottom } = cardRectIn(colEl, c);
+    if (top <= probe && bottom > probe) { vis = c; break; }
+    if (top > probe) { vis = c; break; } // 视口顶部落在卡片间隙
+  }
+  return vis || cards[cards.length - 1];
+}
+
+/** -1 段（新增内容）就近映射到相邻的已对齐段 */
+function nearestAlignedSec(assign, pidx) {
+  for (let d = 1; d < assign.length; d++) {
+    const prev = assign[pidx - d];
+    if (prev != null && prev >= 0) return prev;
+    const next = assign[pidx + d];
+    if (next != null && next >= 0) return next;
+  }
+  return -1;
+}
+
+/** 以 skill 列的当前视口为驱动，同步其余列（段内插值连续跟踪） */
 function driveSyncScroll(sourceSkill) {
-  try {
-    const skills = getActiveSkills();
-    const srcEl = $('col-' + sourceSkill);
+  const skills = getActiveSkills();
+  const srcEl = $('col-' + sourceSkill);
 
-    // 无 compare 数据（构建失败/未就绪）→ 像素级等比例同步兜底
-    if (!state.compare) {
-      const srcMax = srcEl.scrollHeight - srcEl.clientHeight;
-      const ratio = srcMax > 0 ? srcEl.scrollTop / srcMax : 0;
-      skills.forEach((sk) => {
-        if (sk === sourceSkill) return;
-        const el = $('col-' + sk);
-        if (!el) return;
-        const max = el.scrollHeight - el.clientHeight;
-        el.scrollTop = max > 0 ? ratio * max : 0;
-      });
-      return;
-    }
-
-    const { assigns } = state.compare;
-    const srcAssign = assigns[sourceSkill] || [];
-
-    // 到底/接近底部 → 其余列也到底
-    const atBottom = srcEl.scrollTop + srcEl.clientHeight >= srcEl.scrollHeight - 30;
-    if (atBottom) {
-      skills.forEach((sk) => {
-        if (sk !== sourceSkill) {
-          const el = $('col-' + sk);
-          if (el) el.scrollTop = el.scrollHeight;
-        }
-      });
-      updateSectionIndicator(sourceSkill, srcAssign.length - 1);
-      return;
-    }
-
-    // 找当前顶部可见的源列段落（视口顶部 + 少量偏移内第一张卡）
-    const cards = Array.from(srcEl.querySelectorAll('.para-card'));
-    const probe = srcEl.scrollTop + 40;
-    let visIdx = 0;
-    for (const c of cards) {
-      if (c.offsetTop <= probe) visIdx = parseInt(c.dataset.pidx);
-      else break;
-    }
-    const secIdx = srcAssign[visIdx];
-    updateSectionIndicator(sourceSkill, visIdx);
-
-    if (secIdx == null || secIdx < 0) return; // 新增内容段：无对齐目标，不驱动
-    // 其余列滚到该标准段的首张卡片
+  // 无 compare 数据（构建失败/未就绪）→ 像素级等比例同步兜底
+  if (!state.compare) {
+    const srcMax = srcEl.scrollHeight - srcEl.clientHeight;
+    const ratio = srcMax > 0 ? srcEl.scrollTop / srcMax : 0;
     skills.forEach((sk) => {
       if (sk === sourceSkill) return;
       const el = $('col-' + sk);
       if (!el) return;
-      const a = assigns[sk] || [];
-      const firstPi = a.findIndex((t) => t === secIdx);
-      if (firstPi < 0) return; // 该列此段无对应
-      const target = el.querySelector(`.para-card[data-pidx="${firstPi}"]`);
-      if (target) el.scrollTop = target.offsetTop - 8;
+      const max = el.scrollHeight - el.clientHeight;
+      el.scrollTop = max > 0 ? ratio * max : 0;
     });
-  } finally {
-    // 程序滚动触发其余列的 scroll 事件 → locked 挡住；稍后解锁
-    setTimeout(() => { syncScroll.locked = false; }, 80);
+    return;
   }
+
+  const { assigns } = state.compare;
+  const srcAssign = assigns[sourceSkill] || [];
+
+  // 到底 → 其余列也到底
+  const atBottom = srcEl.scrollTop + srcEl.clientHeight >= srcEl.scrollHeight - 30;
+  if (atBottom) {
+    skills.forEach((sk) => {
+      if (sk !== sourceSkill) {
+        const el = $('col-' + sk);
+        if (el) el.scrollTop = el.scrollHeight;
+      }
+    });
+    updateSectionIndicator(sourceSkill, srcAssign.length - 1);
+    return;
+  }
+
+  const visCard = findVisibleCard(srcEl);
+  if (!visCard) return;
+  const visIdx = parseInt(visCard.dataset.pidx);
+  let secIdx = srcAssign[visIdx];
+  const isNew = secIdx == null || secIdx < 0;
+  if (isNew) secIdx = nearestAlignedSec(srcAssign, visIdx); // 就近映射，同步不冻结
+  updateSectionIndicator(sourceSkill, visIdx, isNew);
+  if (secIdx < 0) return;
+
+  // 源列段内进度：可见卡区间 [top, bottom) 内的连续比例
+  const vr = cardRectIn(srcEl, visCard);
+  const cardSpan = vr.bottom - vr.top;
+  const p = cardSpan > 0 ? Math.min(1, Math.max(0, (srcEl.scrollTop - vr.top) / cardSpan)) : 0;
+
+  // 目标列：定位到同段卡片区间，按 p 插值（连续跟随）
+  skills.forEach((sk) => {
+    if (sk === sourceSkill) return;
+    const el = $('col-' + sk);
+    if (!el) return;
+    const a = assigns[sk] || [];
+    const pidxs = a.map((t, i) => (t === secIdx ? i : -1)).filter((i) => i >= 0);
+    if (pidxs.length === 0) return;
+    const first = el.querySelector(`.para-card[data-pidx="${pidxs[0]}"]`);
+    const last = el.querySelector(`.para-card[data-pidx="${pidxs[pidxs.length - 1]}"]`);
+    if (!first || !last) return;
+    const fr = cardRectIn(el, first);
+    const lr = cardRectIn(el, last);
+    const span = lr.bottom - fr.top;
+    el.scrollTop = span > 0 ? fr.top - 8 + p * span : fr.top - 8;
+  });
 }
 
 /** 列头当前段指示：更新列头下的「第 X/Y 段 · 标题」 */
-function updateSectionIndicator(skill, paraIdx) {
+function updateSectionIndicator(skill, paraIdx, isNew) {
   const hint = $('secHint-' + skill);
   if (!hint || !state.compare) return;
   const { sections, assigns } = state.compare;
-  const secIdx = (assigns[skill] || [])[paraIdx];
+  if (isNew == null) isNew = false;
+  const secIdx = isNew ? -1 : (assigns[skill] || [])[paraIdx];
   if (secIdx == null || secIdx < 0) {
-    hint.textContent = '✦ 新增内容';
+    hint.textContent = isNew ? '✦ 新增内容（就近同步）' : '✦ 新增内容';
     hint.style.color = 'var(--c3)';
   } else {
     const total = sections.length;
@@ -800,6 +932,10 @@ function updateCompareUI() {
   if (!compareBtn || !freeBtn) return;
   // 对比数据存在（或构建中）才显示切换按钮
   switchWrap.style.display = state.compare || state.compareBuilding ? '' : 'none';
+  // 构建中：按钮半透明 + loading 文案；就绪后点亮
+  const building = state.compareBuilding && !state.compare;
+  compareBtn.classList.toggle('building', building);
+  compareBtn.textContent = building ? '分段对比 ⏳' : '分段对比';
   compareBtn.classList.toggle('active', state.viewMode === 'compare');
   freeBtn.classList.toggle('active', state.viewMode === 'free');
   if (state.viewMode === 'compare') {
@@ -2312,8 +2448,18 @@ async function generate() {
 
   const skills = getActiveSkills();
 
-  // 文字生成
-  const textPromises = skills.map((skill) => generateColumn(skill, raw, config));
+  // 原文分段前置启动：deriveSections 只依赖原文，与三列文字并行跑，
+  // 吃掉原先「等三列完成才开始分段」的 20s+ 串行窗口
+  startSectionPipeline(config);
+
+  // 文字生成：每列完成即尝试对齐（配合前置分段形成流水线）
+  const fastConfig = { ...config, model: 'deepseek/deepseek-v4-flash' };
+  const textPromises = skills.map((skill) =>
+    generateColumn(skill, raw, config).then((res) => {
+      if (res.ok) alignColumnPipeline(skill, fastConfig);
+      return res;
+    })
+  );
 
   // 配图生成（如果开启）
   let imgPromise = null;
@@ -2344,10 +2490,20 @@ async function generate() {
       ? `生成完成 · 文字 ${okCount}/${totalSkills} + 配图 ${imgOk}/${imgTotal}`
       : '生成完成 · 双击段落收入拼接区';
     toast(imgEnabled ? `${totalSkills} 版文字 + ${imgOk} 张配图已生成` : `${totalSkills} 版已生成`);
-    // 构建分段对比（原文标准分段 + 各列映射），不阻塞主流程
-    buildCompare(config);
+    // 分段对比流水线已在生成开始时启动；此处只做兜底检查（万一某列回调漏触发）
+    if (!state.compare && !comparePipeline.finished && comparePipeline.sections) {
+      skills.forEach((sk) => {
+        if (state.paragraphs[sk] && state.paragraphs[sk].length > 0) alignColumnPipeline(sk, fastConfig);
+      });
+    }
   } else {
     $('statusText').textContent = `完成 · ${okCount} 成功，${totalSkills - okCount} 失败`;
+    // 部分失败：成功列照常对齐，失败列标记完成避免流水线卡住
+    if (!comparePipeline.finished) {
+      results.forEach((r, i) => { if (!(r.status === 'fulfilled' && r.value.ok)) comparePipeline.done.add(skills[i]); });
+      updateCompareProgress();
+      finishComparePipeline();
+    }
     toast(`${totalSkills - okCount} 个技能调用失败`);
   }
   } finally {
@@ -2367,14 +2523,16 @@ async function regenerateColumn(skill) {
   if (result.ok) {
     $('statusText').textContent = `${skill} 已重新生成`;
     toast(`${skill} 已更新`);
-    // 重新生成了该列 → 若对比数据存在，重新映射该列（用快速模型）
-    if (state.compare) {
+    // 重新生成了该列 → 若分段数据在，重新映射该列（用快速模型）
+    if (comparePipeline.sections || state.compare) {
       try {
+        const secs = state.compare ? state.compare.sections : comparePipeline.sections;
         state.compare.assigns[skill] = await alignSkillToSections(
-          state.compare.sections,
+          secs,
           state.paragraphs[skill],
           { ...config, model: 'deepseek/deepseek-v4-flash' }
         );
+        comparePipeline.assigns[skill] = state.compare.assigns[skill];
         if (state.viewMode === 'compare') renderCompare();
         toast('分段对比已更新');
       } catch {}
@@ -2817,6 +2975,16 @@ async function copyWithHtml(text, html) {
 
 function openExportModal() {
   if (state.stitch.length === 0) { toast('拼接区为空，先双击段落或拖入图片'); return; }
+  // 分段对比仍在构建中 → 提醒（对比未就绪时不影响导出内容本身，但段落
+  // 对齐导航/整行收入不可用，用户可能想等它完成再挑段落）
+  if (!state.compare && !comparePipeline.finished) {
+    const N = comparePipeline.skills.length;
+    const remaining = N - comparePipeline.done.size;
+    const msg = comparePipeline.sections
+      ? `分段对比还在构建中（还差 ${remaining} 列对齐）。\n现在导出将不包含段落对齐信息，确定继续吗？`
+      : '分段对比还在分析原文结构，尚未就绪。\n现在导出将不包含段落对齐信息，确定继续吗？';
+    if (!window.confirm(msg)) return;
+  }
   const modal = $('exportModal');
   const preview = $('exportPreview');
   // 预览：模拟真实导出排版（图片真实缩略、文本按段落），所见即所得
@@ -2930,6 +3098,9 @@ window.adjustReadingFs = adjustReadingFs;
 window.toggleCardHidden = toggleCardHidden;
 window.unhideAllCards = unhideAllCards;
 window.toggleSyncScroll = toggleSyncScroll;
+// E2E 调试钩子：只读暴露内部状态（不用于产品逻辑）
+window.__ww_state = state;
+window.__ww_pipeline = comparePipeline;
 window.openImgDetail = openImgDetail;
 window.closeImgDetail = closeImgDetail;
 window.openImgRegen = openImgRegen;

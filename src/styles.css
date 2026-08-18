@@ -586,6 +586,16 @@ body{
 .view-btn{padding:5px 16px;font-size:13px;border:none;background:transparent;box-shadow:none;border-radius:8px;color:var(--text-dim);font-weight:600}
 .view-btn:hover{background:var(--surface);color:var(--accent);box-shadow:none;transform:none}
 .view-btn.active{background:var(--surface);color:var(--accent);box-shadow:var(--shadow-sm)}
+/* 构建中：分段对比按钮半透明待点亮 */
+.view-btn.building{opacity:.55;cursor:default}
+
+/* ===== 顶栏分段对比进度组件 ===== */
+.cmp-progress{display:inline-flex;align-items:center;gap:8px;padding:4px 12px;border:1px solid var(--border);border-radius:999px;background:var(--surface2);font-size:var(--fs-xs);color:var(--text-dim);white-space:nowrap}
+.cmp-spin{width:10px;height:10px;border-radius:50%;border:2px solid var(--border-strong);border-top-color:var(--accent);animation:cmp-rotate .8s linear infinite;flex:none}
+@keyframes cmp-rotate{to{transform:rotate(360deg)}}
+.cmp-track{width:90px;height:6px;border-radius:3px;background:var(--surface3);overflow:hidden;flex:none}
+.cmp-bar{display:block;height:100%;width:0;border-radius:3px;background:var(--accent);transition:width .4s ease}
+@media (max-width:860px){.cmp-progress .cmp-track{display:none}}
 
 /* ===== COMPARE VIEW（分段对比视图） ===== */
 #compareView{

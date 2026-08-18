@@ -265,6 +265,11 @@
       <button class="fs-btn" id="fsUp" onclick="adjustReadingFs(1)" title="增大字号">A＋</button>
     </div>
     <button class="btn btn-mini sync-scroll-btn" id="syncScrollBtn" onclick="toggleSyncScroll()" title="同步滚动：滚动一列，其余列按段落对齐跟随（点击开/关）">⇕ 同步滚动</button>
+    <div class="cmp-progress" id="cmpProgress" style="display:none">
+      <span class="cmp-spin"></span>
+      <span class="cmp-label">分段对比：分析原文结构…</span>
+      <span class="cmp-track"><span class="cmp-bar"></span></span>
+    </div>
     <span class="status" id="statusText"></span>
   </div>
 
