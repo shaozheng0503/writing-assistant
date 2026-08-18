@@ -268,7 +268,10 @@ function updateModelOptions() {
     $('llmModel').style.display = '';
     $('llmModelCustom').style.display = 'none';
     $('baseUrlWrap').style.display = 'none';
-    $('llmModel').innerHTML = p.models.map((m) => `<option value="${m}">${getModelLabel(m)}</option>`).join('');
+    $('llmModel').innerHTML = p.models.map((m) => {
+      const label = getModelLabel(m);
+      return `<option value="${m}" title="${escapeHtml(label)}">${escapeHtml(label)}</option>`;
+    }).join('');
   }
 }
 
@@ -1022,6 +1025,68 @@ function deleteCustomSkill(id) {
   toast('已删除');
 }
 
+/* ===== 技能试跑：表单草稿提示词 → 真实 LLM 调用 → 结果预览 ===== */
+/**
+ * 目的：新增/编辑技能时先验证提示词效果，避免保存后跑真文才发现问题。
+ * 样文来源：输入框已有原文 → 取前 600 字；否则用 DEMO_TEXT。
+ * 提示词：表单草稿 + CUSTOM_TASK_SUFFIX（与正式生成完全一致的合成规则）。
+ */
+let skillTesting = false;
+async function testCustomSkill() {
+  if (skillTesting) return; // 防重复点击
+  const name = $('skillName').value.trim() || '未命名技能';
+  const prompt = $('skillPrompt').value.trim();
+  const resultEl = $('skillTestResult');
+  const btn = $('skillTestBtn');
+  if (prompt.length < 10) {
+    resultEl.style.display = '';
+    resultEl.className = 'sm-test-result warn';
+    resultEl.innerHTML = '系统提示词太短（至少 10 字），先写好再试跑。';
+    return;
+  }
+  const config = getLLMConfig();
+  if (!config.apiKey) {
+    resultEl.style.display = '';
+    resultEl.className = 'sm-test-result err';
+    resultEl.innerHTML = '请先在「① 文字模型」填好 API Key 再试跑。';
+    return;
+  }
+  if (!config.model) {
+    resultEl.style.display = '';
+    resultEl.className = 'sm-test-result err';
+    resultEl.innerHTML = '请先在「① 文字模型」选择模型再试跑。';
+    return;
+  }
+  // 样文：输入框原文优先，截前 600 字；否则 DEMO_TEXT
+  const raw = $('rawInput').value.trim();
+  const sample = raw ? raw.substring(0, 600) : DEMO_TEXT;
+  const sourceLabel = raw ? '输入框原文（前 600 字）' : '内置示例文';
+  skillTesting = true;
+  btn.disabled = true;
+  btn.textContent = '试跑中…';
+  resultEl.style.display = '';
+  resultEl.className = 'sm-test-result loading';
+  resultEl.innerHTML = `正在用「${escapeHtml(config.model)}」试跑（样文：${sourceLabel}），稍候…`;
+  try {
+    const { text } = await callLLM(
+      prompt.trim() + CUSTOM_TASK_SUFFIX(name),
+      sample,
+      config
+    );
+    resultEl.className = 'sm-test-result ok';
+    resultEl.innerHTML =
+      `<div class="sm-test-head">✓ 试跑成功 · ${escapeHtml(name)} · ${escapeHtml(config.model)} · 样文：${sourceLabel}</div>` +
+      `<div class="sm-test-body">${escapeHtml(text.trim() || '（空响应）')}</div>`;
+  } catch (err) {
+    resultEl.className = 'sm-test-result err';
+    resultEl.innerHTML = `<div class="sm-test-head">✗ 试跑失败</div><div class="sm-test-body">${escapeHtml(err.message || String(err))}</div>`;
+  } finally {
+    skillTesting = false;
+    btn.disabled = false;
+    btn.textContent = '▶ 试跑';
+  }
+}
+
 /* ===== 生图 API 配置面板 ===== */
 /**
  * 交互流：
@@ -1273,7 +1338,7 @@ function initImageModelSelect() {
   const sel = $('imgModelSelect');
   if (!sel) return;
   sel.innerHTML = IMAGE_MODELS.map(
-    (m) => `<option value="${m.slug}"${m.slug === getImageModel() ? ' selected' : ''}>${m.label}</option>`
+    (m) => `<option value="${m.slug}"${m.slug === getImageModel() ? ' selected' : ''} title="${escapeHtml(m.label)}">${escapeHtml(m.label)}</option>`
   ).join('') + `<option value="__custom__">自定义 slug…</option>`;
   sel.addEventListener('change', () => {
     if (sel.value === '__custom__') {
@@ -2493,6 +2558,7 @@ window.editCustomSkillForm = editCustomSkillForm;
 window.submitSkillForm = submitSkillForm;
 window.toggleCustomSkill = toggleCustomSkill;
 window.deleteCustomSkill = deleteCustomSkill;
+window.testCustomSkill = testCustomSkill;
 
 /* ===== 初始化 ===== */
 $('generateBtn').addEventListener('click', generate);

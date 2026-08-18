@@ -234,13 +234,15 @@
             </div>
           </div>
           <div class="llm-field">
-            <label>系统提示词（这个技能如何改写文字，越具体越好）</label>
+            <label>系统提示词（这个技能如何改写文字，越具体越好；写完可试跑验证）</label>
             <textarea id="skillPrompt" rows="5" placeholder="例：你是一个小红书风格改写器。规则：&#10;1. 每段开头用 emoji 点题&#10;2. 句子口语化、短促、有网感&#10;3. 保留原文全部事实信息，不得杜撰&#10;4. 直接输出改写后的正文"></textarea>
           </div>
           <div class="sm-form-actions">
             <button class="btn btn-sm" onclick="openSkillForm()">取消</button>
+            <button class="btn btn-sm" id="skillTestBtn" onclick="testCustomSkill()" title="用一段样文真实调用 LLM，验证这个提示词的改写效果">▶ 试跑</button>
             <button class="btn btn-sm btn-primary" onclick="submitSkillForm()"><span id="skillFormSubmitText">添加</span></button>
           </div>
+          <div class="sm-test-result" id="skillTestResult" style="display:none"></div>
         </div>
       </div>
     </div>

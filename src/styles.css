@@ -1,4 +1,5 @@
 :root{
+  color-scheme:light; /* 原生控件（select 箭头/下拉列表/checkbox）跟随主题 */
   /* ===== 浅色主题（默认） ===== */
   --bg:#f2f4f8; --bg-grad:linear-gradient(180deg,#f7f9fc 0%,#eef1f6 100%);
   --surface:#ffffff; --surface2:#f5f7fa; --surface3:#e8edf4;
@@ -39,6 +40,7 @@
 }
 /* ===== 暗色主题 ===== */
 [data-theme="dark"]{
+  color-scheme:dark; /* 暗色下原生下拉列表/箭头自动用深色渲染 */
   --bg:#0f141c; --bg-grad:linear-gradient(180deg,#121826 0%,#0d1117 100%);
   --surface:#161c26; --surface2:#1c2432; --surface3:#232d3f;
   --border:#2a3446; --border-strong:#3a4658;
@@ -146,9 +148,10 @@ body{
 .llm-field{display:flex;flex-direction:column;gap:5px}
 .llm-field label{font-size:var(--fs-xs);color:var(--text-dim);font-weight:600;letter-spacing:.5px}
 .llm-field select,.llm-field input[type=text],.llm-field input[type=password]{
-  background:var(--surface2);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);
-  padding:8px 12px;font-size:14px;font-family:inherit;min-width:150px;transition:border-color .15s,box-shadow .15s;
+  background-color:var(--surface2);border:1px solid var(--border-strong);border-radius:8px;color:var(--text);
+  padding:8px 12px;font-size:14px;font-family:inherit;min-width:150px;max-width:100%;transition:border-color .15s,box-shadow .15s;
 }
+.llm-field select{padding-right:34px;text-overflow:ellipsis}
 .llm-field select:focus,.llm-field input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
 .llm-hint{font-size:var(--fs-xs);color:var(--text-dim);margin-top:-2px}
 
@@ -450,12 +453,19 @@ body{
 .img-hint{font-size:var(--fs-xs);color:var(--text-dim)}
 .img-model-pick{display:flex;align-items:center;gap:8px}
 .img-model-label{font-size:14px;color:var(--text);font-weight:600}
-#imgModelSelect{
-  background:var(--surface);color:var(--text);border:1px solid var(--border-strong);
-  border-radius:8px;padding:5px 10px;font-size:13px;font-family:inherit;cursor:pointer;
-  box-shadow:var(--shadow-sm);max-width:250px;
+/* 进阶设置里的三个下拉（生图模型/尺寸/张数）：与 .llm-field select 统一观感 */
+#imgModelSelect,#imgSizeSelect,#imgCountSelect{
+  background-color:var(--surface);color:var(--text);border:1px solid var(--border-strong);
+  border-radius:8px;padding:7px 34px 7px 12px;font-size:13.5px;font-family:inherit;cursor:pointer;
+  box-shadow:var(--shadow-sm);max-width:none;min-width:0;transition:border-color .15s,box-shadow .15s;
+  text-overflow:ellipsis;
 }
-#imgModelSelect:focus{outline:none;border-color:var(--accent)}
+#imgModelSelect:hover,#imgSizeSelect:hover,#imgCountSelect:hover{border-color:var(--accent)}
+#imgModelSelect:focus,#imgSizeSelect:focus,#imgCountSelect:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
+#imgModelSelect:disabled,#imgSizeSelect:disabled,#imgCountSelect:disabled{opacity:.55;cursor:not-allowed}
+/* 生图 API 面板内的下拉统一（服务/比例） */
+#imgApiProvider,#imgApiRatio{max-width:100%;flex:1;min-width:0}
+.imgapi-row .llm-field select{max-width:100%}
 
 /* ===== VIEW SWITCH（视图切换） ===== */
 .view-switch{display:flex;gap:0;background:var(--surface2);border:1px solid var(--border-strong);border-radius:10px;padding:2px}
@@ -566,6 +576,23 @@ body{
 .sm-form textarea:focus,.sm-form input:focus{outline:none;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-glow)}
 .sm-form-actions{display:flex;gap:10px;justify-content:flex-end}
 
+/* ===== 技能试跑结果 ===== */
+.sm-test-result{
+  border-radius:9px;padding:10px 14px;font-size:var(--fs-sm);
+  display:flex;flex-direction:column;gap:6px;border:1px solid var(--border);
+}
+.sm-test-result.loading{background:var(--surface2);color:var(--text-dim);border-style:dashed}
+.sm-test-result.warn{background:var(--warn-bg);color:var(--c3);border-color:var(--warn-bd)}
+.sm-test-result.ok{background:var(--ok-bg);border-color:var(--tag2-bd)}
+.sm-test-result.err{background:var(--err-bg);border-color:var(--err-bd)}
+.sm-test-head{font-weight:700;font-size:var(--fs-xs)}
+.sm-test-result.ok .sm-test-head{color:var(--c2)}
+.sm-test-result.err .sm-test-head{color:var(--danger)}
+.sm-test-body{
+  white-space:pre-wrap;word-break:break-word;line-height:1.9;color:var(--text);
+  max-height:260px;overflow-y:auto;padding-right:4px;
+}
+
 /* ===== 生图 API 配置面板 ===== */
 .imgapi-panel{
   background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
@@ -633,6 +660,9 @@ body{
   .panel-body{padding:12px 14px}
   .llm-row{flex-direction:column;gap:10px;align-items:stretch}
   .llm-row .btn-sm{align-self:flex-start}
+  .llm-field{width:100%}
+  .llm-field select,.llm-field input[type=text],.llm-field input[type=password]{width:100%}
+  #imgModelSelect,#imgSizeSelect,#imgCountSelect{width:100%}
   .input-actions{flex-direction:column-reverse;gap:10px}
   .input-actions .btn-lg{width:100%;padding:13px 20px}
   #rawInput{height:200px;font-size:15px;padding:14px 16px}
