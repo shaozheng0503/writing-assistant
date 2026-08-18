@@ -251,6 +251,48 @@ function imagiflyProxyPlugin(cookie) {
         }
       });
 
+      // 连通性测试（零额度消耗：仅校验代理与 cookie 配置存在）
+      server.middlewares.use('/imagifly-proxy/ping', async (req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({ ok: !!cookie, hint: cookie ? '' : 'IMAGIFLY_COOKIE 未配置' }));
+      });
+
+      // 保存任意图片（dataURL POST 或外站 URL GET?save=1）到 saved-images/
+      // 用于自定义生图 API：返回的 b64_json / 外站 URL 无法走 cookie 代理落盘
+      server.middlewares.use('/imagifly-proxy/save-data', async (req, res) => {
+        if (req.method !== 'POST') {
+          res.statusCode = 405;
+          res.end(JSON.stringify({ error: 'Method not allowed' }));
+          return;
+        }
+        try {
+          const chunks = [];
+          for await (const chunk of req) chunks.push(chunk);
+          const raw = Buffer.concat(chunks).toString();
+          const m = raw.match(/^data:image\/(png|jpeg|jpg|gif|webp);base64,(.+)$/s);
+          if (!m) {
+            res.statusCode = 400;
+            res.end(JSON.stringify({ error: 'Not a valid image data URL' }));
+            return;
+          }
+          const buf = Buffer.from(m[2], 'base64');
+          const ext = m[1] === 'jpeg' ? 'jpg' : m[1];
+          const url = new URL(req.url, 'http://localhost');
+          const cap = (url.searchParams.get('caption') || '').replace(/[\\/:*?"<>|\s]+/g, '').substring(0, 24);
+          const stamp = new Date().toISOString().replace(/[-:T]/g, '').substring(2, 14);
+          const savedName = `${stamp}-${cap || 'image'}.${ext}`;
+          const dir = resolve(process.cwd(), 'saved-images');
+          if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
+          writeFileSync(join(dir, savedName), buf);
+          res.setHeader('Content-Type', 'application/json');
+          res.setHeader('X-Saved-As', encodeURIComponent(savedName));
+          res.end(JSON.stringify({ ok: true, savedName }));
+        } catch (e) {
+          res.statusCode = 500;
+          res.end(JSON.stringify({ error: e.message }));
+        }
+      });
+
       // 打开本地图片文件夹（资源管理器）
       server.middlewares.use('/imagifly-proxy/open-folder', async (req, res) => {
         const dir = resolve(process.cwd(), 'saved-images');

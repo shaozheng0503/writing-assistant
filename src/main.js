@@ -1022,6 +1022,187 @@ function deleteCustomSkill(id) {
   toast('已删除');
 }
 
+/* ===== 生图 API 配置面板 ===== */
+/**
+ * 交互流：
+ * - 折叠面板（ww_imgapi_panel_collapsed 记忆态）
+ * - 供应商切换 → 显隐 custom 字段 + 状态徽标更新
+ * - API Key：password 输入框脱敏 + 👁 明文切换；已保存显示 ●●●尾4位
+ * - 保存 → 校验 → ww_img_api 持久化 → 徽标/生图设置区同步刷新
+ * - 测试连接 → testImgApiConnection → 成功绿/失败红 + 具体原因
+ * - 恢复默认 → 确认后清 ww_img_api 回 imagifly
+ */
+function maskKey(key) {
+  if (!key) return '';
+  if (key.length <= 8) return '•'.repeat(key.length);
+  return `${key.slice(0, 4)}••••${key.slice(-4)}`;
+}
+function initImgApiPanel() {
+  const head = $('imgApiHead'), body = $('imgApiBody');
+  if (!head || !body) return;
+  const caret = $('imgApiCaret');
+  const collapsed = localStorage.getItem('ww_imgapi_panel_collapsed') !== '0'; // 默认折叠，显式展开过才展开
+  body.style.display = collapsed ? 'none' : '';
+  if (caret) caret.textContent = collapsed ? '▸' : '▾';
+  head.addEventListener('click', () => {
+    const nowCollapsed = body.style.display !== 'none';
+    body.style.display = nowCollapsed ? 'none' : '';
+    if (caret) caret.textContent = nowCollapsed ? '▸' : '▾';
+    localStorage.setItem('ww_imgapi_panel_collapsed', nowCollapsed ? '1' : '0');
+  });
+
+  // 供应商切换
+  const provSel = $('imgApiProvider');
+  if (provSel) {
+    provSel.addEventListener('change', () => {
+      // 切供应商只改 UI 预览，点保存才落库
+      refreshImgApiCustomFields();
+    });
+  }
+
+  // API Key 脱敏切换
+  const keyInput = $('imgApiKey'), eye = $('imgApiKeyEye');
+  if (keyInput && eye) {
+    eye.addEventListener('click', () => {
+      const show = keyInput.type === 'password';
+      keyInput.type = show ? 'text' : 'password';
+      eye.textContent = show ? '🙈' : '👁';
+    });
+  }
+
+  // 比例预设 → 宽高联动
+  const ratioSel = $('imgApiRatio');
+  if (ratioSel) {
+    ratioSel.addEventListener('change', () => {
+      const hit = IMG_RATIO_PRESETS.find((p) => p.label === ratioSel.value);
+      if (hit) {
+        $('imgApiWidth').value = hit.w;
+        $('imgApiHeight').value = hit.h;
+      }
+    });
+  }
+  // 宽高改动手输 → 比例下拉变「自定义」
+  for (const id of ['imgApiWidth', 'imgApiHeight']) {
+    const el = $(id);
+    if (el) el.addEventListener('input', () => {
+      const w = parseInt($('imgApiWidth').value), h = parseInt($('imgApiHeight').value);
+      const rs = $('imgApiRatio');
+      if (!rs) return;
+      rs.value = IMG_RATIO_PRESETS.some((p) => p.w === w && p.h === h)
+        ? IMG_RATIO_PRESETS.find((p) => p.w === w && p.h === h).label
+        : '自定义';
+    });
+  }
+
+  // 保存
+  const saveBtn = $('imgApiSave');
+  if (saveBtn) saveBtn.addEventListener('click', saveImgApiFromForm);
+  // 测试连接
+  const testBtn = $('imgApiTest');
+  if (testBtn) testBtn.addEventListener('click', async () => {
+    // 先保存当前表单（测试应基于所见配置），imagifly 供应商无需校验 key
+    saveImgApiFromForm(true);
+    const btn = $('imgApiTest'), out = $('imgApiTestResult');
+    btn.disabled = true;
+    const orig = btn.textContent;
+    btn.textContent = '测试中…';
+    out.style.display = 'none';
+    const r = await testImgApiConnection();
+    btn.disabled = false;
+    btn.textContent = orig;
+    out.style.display = '';
+    out.className = 'imgapi-test-result ' + (r.ok ? 'ok' : 'err');
+    out.textContent = (r.ok ? '✓ ' : '✗ ') + r.msg;
+  });
+  // 恢复默认
+  const resetBtn = $('imgApiReset');
+  if (resetBtn) resetBtn.addEventListener('click', () => {
+    if (!confirm('恢复默认生图配置？（切回 Imagifly 代理，清空自定义 API Key/地址/模型）')) return;
+    localStorage.removeItem('ww_img_api');
+    fillImgApiForm();
+    refreshImgApiBadge();
+    syncApiSizeInputs();
+    toast('已恢复默认生图配置（Imagifly）');
+  });
+
+  fillImgApiForm();
+  refreshImgApiBadge();
+  syncApiSizeInputs();
+}
+
+/** 表单 → 配置对象 → 落库；silent=true 时不弹 toast（测试连接内部调用） */
+function saveImgApiFromForm(silent) {
+  const cfg = {
+    provider: $('imgApiProvider').value,
+    apiKey: $('imgApiKey').value.trim(),
+    baseUrl: $('imgApiBaseUrl').value.trim(),
+    model: $('imgApiModel').value.trim(),
+    width: parseInt($('imgApiWidth').value) || IMG_API_DEFAULTS.width,
+    height: parseInt($('imgApiHeight').value) || IMG_API_DEFAULTS.height,
+  };
+  if (cfg.provider === 'custom') {
+    if (!cfg.apiKey) { if (!silent) toast('自定义 API 需填写 API Key'); return false; }
+    if (!/^https?:\/\//.test(cfg.baseUrl)) { if (!silent) toast('接口地址需以 http(s):// 开头'); return false; }
+    if (!cfg.model) { if (!silent) toast('请填写模型名（如 gpt-image-1）'); return false; }
+    if (cfg.width < 64 || cfg.width > 4096 || cfg.height < 64 || cfg.height > 4096) {
+      if (!silent) toast('宽高需在 64~4096 之间');
+      return false;
+    }
+  }
+  saveImgApiConfig(cfg);
+  refreshImgApiBadge();
+  syncApiSizeInputs();
+  // 刷新脱敏标签（保存后立即可见已保存态）
+  const maskedEl = $('imgApiKeyMasked');
+  if (maskedEl) maskedEl.textContent = cfg.apiKey ? `已保存: ${maskKey(cfg.apiKey)}` : '未设置';
+  if (!silent) toast('生图 API 配置已保存');
+  return true;
+}
+
+/** 配置 → 表单（含 key 脱敏回显） */
+function fillImgApiForm() {
+  const cfg = getImgApiConfig();
+  $('imgApiProvider').value = cfg.provider;
+  $('imgApiKey').value = cfg.apiKey;
+  $('imgApiKey').type = 'password';
+  $('imgApiKeyEye').textContent = '👁';
+  $('imgApiKeyMasked').textContent = cfg.apiKey ? `已保存: ${maskKey(cfg.apiKey)}` : '未设置';
+  $('imgApiBaseUrl').value = cfg.baseUrl;
+  $('imgApiModel').value = cfg.model;
+  $('imgApiWidth').value = cfg.width;
+  $('imgApiHeight').value = cfg.height;
+  const hit = IMG_RATIO_PRESETS.find((p) => p.w === cfg.width && p.h === cfg.height);
+  $('imgApiRatio').value = hit ? hit.label : '自定义';
+  refreshImgApiCustomFields();
+  $('imgApiTestResult').style.display = 'none';
+}
+
+/** custom 字段显隐（imagifly 时隐藏并提示走代理） */
+function refreshImgApiCustomFields() {
+  const isCustom = $('imgApiProvider').value === 'custom';
+  const wrap = $('imgApiCustomFields');
+  const note = $('imgApiImagiflyNote');
+  if (wrap) wrap.style.display = isCustom ? '' : 'none';
+  if (note) note.style.display = isCustom ? 'none' : '';
+}
+
+/** 状态徽标：imagifly / custom(模型名)；颜色区分 */
+function refreshImgApiBadge() {
+  const el = $('imgApiBadge');
+  if (!el) return;
+  const cfg = getImgApiConfig();
+  if (cfg.provider === 'custom' && cfg.apiKey && cfg.baseUrl) {
+    el.textContent = `自定义 · ${cfg.model || '未填模型'}`;
+    el.className = 'imgapi-badge custom';
+  } else if (cfg.provider === 'custom') {
+    el.textContent = '自定义 · 配置不全';
+    el.className = 'imgapi-badge warn';
+  } else {
+    el.textContent = 'Imagifly';
+    el.className = 'imgapi-badge';
+  }
+}
+
 /* ===== Imagifly 配图生成 ===== */
 
 /**
@@ -1135,6 +1316,7 @@ function initImageExtraSelects() {
     sizeSel.addEventListener('change', () => {
       localStorage.setItem('ww_img_size', sizeSel.value);
       toast(`图片尺寸: ${sizeSel.value}`);
+      syncApiSizeInputs(); // API 配置面板的宽高联动
     });
   }
   if (countSel) {
@@ -1146,10 +1328,151 @@ function initImageExtraSelects() {
   }
 }
 
+/* ===== 生图 API 配置（自定义 OpenAI 兼容接口 / Imagifly） ===== */
+/**
+ * localStorage `ww_img_api`：
+ * {provider:'imagifly'|'custom', apiKey, baseUrl, model, width, height}
+ * - provider=custom 且 apiKey+baseUrl 齐全 → generateImage 走自定义接口
+ * - 否则走 Imagifly 代理（.env cookie）
+ * - width/height 为数字，与快捷尺寸下拉（ww_img_size）双向联动
+ */
+const IMG_API_DEFAULTS = { provider: 'imagifly', apiKey: '', baseUrl: '', model: '', width: 1368, height: 768 };
+const IMG_RATIO_PRESETS = [
+  { label: '16:9 横图', w: 1368, h: 768 },
+  { label: '1:1 方图', w: 1024, h: 1024 },
+  { label: '9:16 竖图', w: 768, h: 1368 },
+  { label: '4:3 横图', w: 1024, h: 768 },
+  { label: '3:4 竖图', w: 768, h: 1024 },
+];
+function getImgApiConfig() {
+  try {
+    const raw = JSON.parse(localStorage.getItem('ww_img_api') || '{}');
+    return {
+      provider: raw.provider === 'custom' ? 'custom' : 'imagifly',
+      apiKey: typeof raw.apiKey === 'string' ? raw.apiKey : '',
+      baseUrl: typeof raw.baseUrl === 'string' ? raw.baseUrl.trim() : '',
+      model: typeof raw.model === 'string' ? raw.model.trim() : '',
+      width: Number.isInteger(raw.width) && raw.width >= 64 && raw.width <= 4096 ? raw.width : IMG_API_DEFAULTS.width,
+      height: Number.isInteger(raw.height) && raw.height >= 64 && raw.height <= 4096 ? raw.height : IMG_API_DEFAULTS.height,
+    };
+  } catch {
+    return { ...IMG_API_DEFAULTS };
+  }
+}
+function saveImgApiConfig(cfg) {
+  localStorage.setItem('ww_img_api', JSON.stringify(cfg));
+}
+/** 当前是否走自定义生图 API（配置齐全才启用，避免半配置状态打挂生成） */
+function isCustomImgApi() {
+  const c = getImgApiConfig();
+  return c.provider === 'custom' && !!c.apiKey && !!c.baseUrl;
+}
+/** 自定义 API 的尺寸（面板宽高）优先；未配置时从快捷尺寸下拉解析 */
+function getImageSizeForApi() {
+  const c = getImgApiConfig();
+  if (c.provider === 'custom' && c.width && c.height) return `${c.width}x${c.height}`;
+  return getImageSize();
+}
+
+/** 面板宽高输入 ↔ 快捷尺寸下拉 双向同步 */
+function syncApiSizeInputs() {
+  const wEl = $('imgApiWidth'), hEl = $('imgApiHeight'), ratioSel = $('imgApiRatio');
+  if (!wEl || !hEl) return;
+  const cur = isCustomImgApi()
+    ? getImgApiConfig()
+    : (() => { const [w, h] = getImageSize().split('x').map(Number); return { width: w, height: h }; })();
+  wEl.value = cur.width; hEl.value = cur.height;
+  if (ratioSel) {
+    const hit = IMG_RATIO_PRESETS.find((p) => p.w === cur.width && p.h === cur.height);
+    ratioSel.value = hit ? hit.label : '自定义';
+  }
+}
+
+/**
+ * 测试连接：真实调用接口验证配置，返回 {ok, msg}
+ * - imagifly：ping 代理（校验 cookie 是否已配置，零额度消耗）
+ * - custom：POST 最小生图请求，按 HTTP 状态归因
+ */
+async function testImgApiConnection() {
+  const cfg = getImgApiConfig();
+  if (cfg.provider === 'imagifly') {
+    try {
+      const r = await fetch('/imagifly-proxy/ping');
+      const d = await r.json().catch(() => ({}));
+      if (r.ok && d.ok) return { ok: true, msg: `Imagifly 代理可用（cookie 已配置，模型 ${getImageModel()}）` };
+      return { ok: false, msg: 'Imagifly 代理不可用：.env 未配置 IMAGIFLY_COOKIE，或 dev server 未重启' };
+    } catch (e) {
+      return { ok: false, msg: `无法连接本地代理: ${e.message}` };
+    }
+  }
+  // custom：真实调用一次
+  if (!cfg.apiKey) return { ok: false, msg: '请先填写 API Key' };
+  if (!cfg.baseUrl) return { ok: false, msg: '请先填写接口地址' };
+  const model = cfg.model || 'gpt-image-1';
+  try {
+    const r = await fetch(`/llm-proxy?target=${encodeURIComponent(cfg.baseUrl)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({ model, prompt: 'a red circle on white background', n: 1, size: `${cfg.width}x${cfg.height}` }),
+    });
+    if (r.ok) {
+      const d = await r.json().catch(() => ({}));
+      const hasImg = d.data && d.data[0] && (d.data[0].url || d.data[0].b64_json);
+      return { ok: true, msg: `连接成功（模型 ${model} 已返回${hasImg ? '测试图片' : '响应'}）` };
+    }
+    const bodyText = await r.text().catch(() => '');
+    if (r.status === 401 || r.status === 403) return { ok: false, msg: `认证失败（HTTP ${r.status}）：API Key 无效或无权限` };
+    if (r.status === 404) return { ok: false, msg: '接口地址错误（404）：请检查 URL 是否为完整的 …/images/generations 端点' };
+    if (r.status === 429) return { ok: false, msg: '请求被限流（429）：Key 有效但额度/频率受限，配置本身可用' };
+    if (r.status >= 500) return { ok: false, msg: `服务端错误（HTTP ${r.status}）：接口地址对但服务异常，可稍后重试` };
+    // 4xx 其他：常见为模型名/参数不合法，透传服务端报错片段
+    let detail = bodyText.slice(0, 140);
+    try { detail = JSON.parse(bodyText).error?.message || detail; } catch {}
+    return { ok: false, msg: `请求被拒（HTTP ${r.status}）：${detail || '请检查模型名与参数'}` };
+  } catch (e) {
+    return { ok: false, msg: `无法连接接口：${e.message}（检查地址是否可达、是否为 https）` };
+  }
+}
+
 /**
  * 提交生图请求 → 轮询 → 返回图片 URL 数组（imageCount>1 时多张）
+ * 按配置分支：自定义 OpenAI 兼容 API（llm-proxy 转发 + Bearer）/ Imagifly 代理
  */
 async function generateImage(prompt) {
+  if (isCustomImgApi()) return generateImageViaCustomApi(prompt);
+  return generateImageViaImagifly(prompt);
+}
+
+/** 自定义 OpenAI 兼容生图接口：POST {model,prompt,n,size} → data[].url | b64_json */
+async function generateImageViaCustomApi(prompt) {
+  const cfg = getImgApiConfig();
+  const count = getImageCount();
+  const res = await fetch(`/llm-proxy?target=${encodeURIComponent(cfg.baseUrl)}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cfg.apiKey}` },
+    body: JSON.stringify({
+      model: cfg.model,
+      prompt,
+      n: count,
+      size: `${cfg.width}x${cfg.height}`,
+    }),
+  });
+  if (!res.ok) {
+    const bodyText = await res.text().catch(() => '');
+    let detail = bodyText.slice(0, 160);
+    try { detail = JSON.parse(bodyText).error?.message || detail; } catch {}
+    if (res.status === 401 || res.status === 403) throw new Error(`生图认证失败（${res.status}）：API Key 无效或无权限`);
+    throw new Error(`生图请求失败（HTTP ${res.status}）：${detail || '未知'}`);
+  }
+  const data = await res.json().catch(() => { throw new Error('返回体不是合法 JSON（检查接口地址是否为生图端点）'); });
+  const items = Array.isArray(data.data) ? data.data : [];
+  const urls = items.map((it) => it.url || (it.b64_json ? `data:image/png;base64,${it.b64_json}` : null)).filter(Boolean);
+  if (urls.length === 0) throw new Error('接口返回成功但无图片（data 数组为空，检查模型名是否为生图模型）');
+  return urls;
+}
+
+/** Imagifly 内置代理流程：submit → 轮询 → 全部图片 URL */
+async function generateImageViaImagifly(prompt) {
   const submitRes = await fetch('/imagifly-proxy/submit', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -1231,7 +1554,12 @@ async function generateAllImages(prompts, config) {
             if (count > 1 && urls.length > 1) img.caption = `${img.caption}（${k + 1}）`;
             renderGalleryCard(img);
             // 自动落盘到本地 saved-images/（知乎等平台粘贴 dataURL 上传易失败，本地留原图最稳）
-            fetch(`/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`)
+            // 外站 URL / dataURL 走通用保存端点（代理下载后落盘）；Imagifly URL 走 cookie 代理
+            const saveUrl = url.startsWith('data:')
+              ? `/imagifly-proxy/save-data?caption=${encodeURIComponent(img.caption || '')}`
+              : `/imagifly-proxy/image?url=${encodeURIComponent(url)}&save=1&caption=${encodeURIComponent(img.caption || '')}`;
+            const saveBody = url.startsWith('data:') ? url : null;
+            fetch(saveUrl, saveBody ? { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: saveBody } : undefined)
               .then((r) => {
                 const saved = r.headers.get('X-Saved-As');
                 if (saved) {
@@ -1512,13 +1840,21 @@ function renderColumnCards(skill) {
 
 /* ===== 生成三版 ===== */
 async function generate() {
+  if (state.generating) return; // 防并发重复点击
   const raw = $('rawInput').value.trim();
   if (!raw) { toast('请先粘贴内容'); return; }
   const config = getLLMConfig();
   if (!config.apiKey) { toast('请先填写 API Key'); return; }
   if (!config.model) { toast('请先选择模型'); return; }
 
-  const imgEnabled = IMAGIFLY_ENABLED && $('imgToggle') && $('imgToggle').checked;
+  // 配图可用：imagifly cookie 已配 或 自定义生图 API 配置齐全
+  const imgEnabled = (IMAGIFLY_ENABLED || isCustomImgApi()) && $('imgToggle') && $('imgToggle').checked;
+
+  state.generating = true;
+  const genBtn = $('generateBtn');
+  genBtn.disabled = true;
+  genBtn.textContent = '生成中…';
+  try {
 
   state.rawText = raw;
   state.images = [];
@@ -1577,6 +1913,11 @@ async function generate() {
   } else {
     $('statusText').textContent = `完成 · ${okCount} 成功，${totalSkills - okCount} 失败`;
     toast(`${totalSkills - okCount} 个技能调用失败`);
+  }
+  } finally {
+    state.generating = false;
+    genBtn.disabled = false;
+    genBtn.textContent = '生成各版 →';
   }
 }
 
@@ -2213,9 +2554,62 @@ renderSkillManager();
   };
 })();
 
-// 配图开关：仅在 imagifly cookie 已配置时显示
-if (IMAGIFLY_ENABLED && $('imgToggleRow')) {
+// 配图开关：imagifly cookie 已配置 或 用户配了自定义生图 API 时显示
+const imgApiReady = isCustomImgApi();
+if ((IMAGIFLY_ENABLED || imgApiReady) && $('imgToggleRow')) {
   $('imgToggleRow').style.display = '';
   initImageModelSelect(); // 生图模型选择器与开关同显示
   initImageExtraSelects(); // 尺寸/张数
 }
+// 生图 API 配置面板：始终可用（自定义 API 不依赖 imagifly cookie）
+initImgApiPanel();
+// ③ 进阶设置折叠面板
+(function initAdvancedPanel() {
+  const head = $('advancedHead'), body = $('advancedBody'), caret = $('advancedCaret');
+  if (!head || !body) return;
+  const collapsed = localStorage.getItem('ww_advanced_collapsed');
+  // 默认折叠：仅当用户显式展开过才展开
+  const open = collapsed === '0';
+  body.style.display = open ? '' : 'none';
+  if (caret) caret.textContent = open ? '▾' : '▸';
+  head.addEventListener('click', () => {
+    const nowCollapsed = body.style.display !== 'none';
+    body.style.display = nowCollapsed ? 'none' : '';
+    if (caret) caret.textContent = nowCollapsed ? '▸' : '▾';
+    localStorage.setItem('ww_advanced_collapsed', nowCollapsed ? '1' : '0');
+  });
+})();
+// 步骤条：滚动高亮当前可见区块
+(function initStepDots() {
+  const page = $('page-input');
+  const dots = [$('stepDot1'), $('stepDot2'), $('stepDot3')];
+  if (!page || dots.some((d) => !d)) return;
+  const sections = () => [
+    $('llmConfig'),
+    document.querySelector('.panel:not(#llmConfig) .panel-head')?.closest('.panel'),
+    $('advancedHead')?.closest('.panel'),
+  ].filter(Boolean);
+  const update = () => {
+    const viewMid = page.scrollTop + page.clientHeight * 0.4;
+    const secs = sections();
+    let active = 0;
+    secs.forEach((sec, i) => { if (sec.offsetTop <= viewMid) active = i; });
+    dots.forEach((d, i) => d.classList.toggle('active', i === active));
+  };
+  page.addEventListener('scroll', update, { passive: true });
+  window.addEventListener('resize', update, { passive: true });
+  update();
+})();
+// 用户保存自定义 API 后，若开关行还藏着（无 cookie 场景），保存时点亮它
+(function watchImgApiForToggle() {
+  const orig = saveImgApiFromForm;
+  saveImgApiFromForm = function (silent) {
+    const ok = orig(silent);
+    if (ok && $('imgToggleRow') && $('imgToggleRow').style.display === 'none') {
+      $('imgToggleRow').style.display = '';
+      initImageModelSelect();
+      initImageExtraSelects();
+    }
+    return ok;
+  };
+})();

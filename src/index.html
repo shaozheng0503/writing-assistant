@@ -23,17 +23,22 @@
       <div class="logo">写作辅助工作台</div>
       <button class="btn btn-sm theme-btn" onclick="toggleTheme()" title="切换明暗主题" id="themeBtn1">🌙</button>
     </div>
-    <div class="sub">
-      粘贴你的原始内容，三个技能各出一版，你挑最好的拼成终稿<br>
-      <span class="skill-tags">
-        <a href="https://github.com/KKKKhazix/human-writing" target="_blank" class="tag tag-c1">human-writing · 卡兹克</a>
-        <a href="https://github.com/op7418/Humanizer-zh" target="_blank" class="tag tag-c2">humanizer-zh · 归藏</a>
-        <a href="https://github.com/lijigang/ljg-skills" target="_blank" class="tag tag-c3">ljg-plain · 李继刚</a>
-      </span>
+    <div class="sub">粘贴原文，多个改写技能各出一版，挑最好的段落拼成终稿</div>
+
+    <!-- 步骤指示（滚动时高亮当前区块） -->
+    <div class="steps-bar" aria-hidden="true">
+      <span class="step-dot active" id="stepDot1">1</span><span class="step-line"></span>
+      <span class="step-dot" id="stepDot2">2</span><span class="step-line"></span>
+      <span class="step-dot" id="stepDot3">3</span>
     </div>
 
-    <!-- LLM 配置区 -->
-    <div class="llm-config" id="llmConfig">
+    <!-- ① 文字模型配置 -->
+    <section class="panel" id="llmConfig">
+      <div class="panel-head">
+        <span class="panel-title">① 文字模型</span>
+        <span class="panel-tip">改写文字用的 LLM</span>
+      </div>
+      <div class="panel-body">
       <div class="llm-row">
         <div class="llm-field">
           <label>Provider</label>
@@ -64,18 +69,37 @@
         <button class="btn btn-sm" id="clearKeyBtn" style="display:none">清除</button>
       </div>
       <div class="llm-hint" id="keyStatus">API Key 仅存在本地 localStorage，不会上传</div>
-    </div>
+      </div>
+    </section>
 
-    <textarea id="rawInput" placeholder="在这里粘贴你的原始内容……
+    <!-- ② 原文输入 -->
+    <section class="panel">
+      <div class="panel-head">
+        <span class="panel-title">② 粘贴原文</span>
+        <span class="panel-tip">AI 初稿 / 有 AI 味的文字 / 任何草稿</span>
+      </div>
+      <div class="panel-body">
+        <textarea id="rawInput" placeholder="在这里粘贴你的原始内容……
 
 可以是 AI 生成的初稿、带有浓重 AI 味的文字、需要改写的草稿等。
-粘贴好后点击下方按钮，三个技能会分别生成各自的版本。
+粘贴好后点击下方按钮，各技能会分别生成各自的版本。
 快捷键：Ctrl+Enter 生成"></textarea>
 
-    <div class="input-actions">
-      <button class="btn" id="demoBtn">载入示例</button>
-      <button class="btn btn-primary" id="generateBtn">生成三版</button>
-    </div>
+        <div class="input-actions">
+          <button class="btn" id="demoBtn">载入示例</button>
+          <button class="btn btn-primary btn-lg" id="generateBtn">生成各版 →</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ③ 进阶设置（默认折叠） -->
+    <section class="panel">
+      <div class="panel-head panel-head-click" id="advancedHead">
+        <span class="panel-title">③ 进阶设置</span>
+        <span class="panel-tip">配图与自定义技能，按需展开</span>
+        <span class="panel-caret" id="advancedCaret">▸</span>
+      </div>
+      <div class="panel-body" id="advancedBody" style="display:none">
 
     <!-- 配图开关 + 生图模型选择 -->
     <div class="img-toggle-row" id="imgToggleRow" style="display:none">
@@ -104,7 +128,79 @@
           <option value="3">3 张</option>
         </select>
       </label>
-      <span class="img-hint">从原文分段提取画面描述，调用 Imagifly 生成插图，可拖拽到拼接区</span>
+      <span class="img-hint">从原文分段提取画面描述，调用生图 API 生成插图，可拖拽到拼接区</span>
+    </div>
+
+    <!-- 生图 API 配置面板 -->
+    <div class="imgapi-panel" id="imgApiPanel">
+      <div class="imgapi-head" id="imgApiHead">
+        <span class="imgapi-title">🎨 生图 API 配置</span>
+        <span class="imgapi-badge" id="imgApiBadge">Imagifly</span>
+        <span class="imgapi-hint">切换生图服务：内置 Imagifly 代理，或任意 OpenAI 兼容生图接口</span>
+        <span class="imgapi-caret" id="imgApiCaret">▸</span>
+      </div>
+      <div class="imgapi-body" id="imgApiBody" style="display:none">
+        <div class="imgapi-row">
+          <div class="llm-field">
+            <label>服务</label>
+            <select id="imgApiProvider">
+              <option value="imagifly" selected>Imagifly（内置代理，免配置）</option>
+              <option value="custom">自定义 API（OpenAI 兼容）</option>
+            </select>
+          </div>
+          <div class="llm-field" style="flex:1">
+            <label>API Key</label>
+            <div class="imgapi-key-wrap">
+              <input type="password" id="imgApiKey" placeholder="sk-...">
+              <button type="button" class="imgapi-eye" id="imgApiKeyEye" title="显示/隐藏">👁</button>
+            </div>
+            <span class="imgapi-key-masked" id="imgApiKeyMasked">未设置</span>
+          </div>
+        </div>
+        <div class="imgapi-note" id="imgApiImagiflyNote">
+          Imagifly 模式使用 dev server 内置代理（.env 配置 IMAGIFLY_COOKIE 即启用），Key 无需填写。模型/尺寸/张数用上方快捷下拉即可。
+        </div>
+        <div id="imgApiCustomFields" style="display:none">
+          <div class="imgapi-row">
+            <div class="llm-field" style="flex:2;min-width:240px">
+              <label>接口地址（完整 images/generations 端点）</label>
+              <input type="text" id="imgApiBaseUrl" placeholder="https://api.openai.com/v1/images/generations">
+            </div>
+            <div class="llm-field" style="flex:1;min-width:150px">
+              <label>默认模型</label>
+              <input type="text" id="imgApiModel" placeholder="gpt-image-1">
+            </div>
+          </div>
+          <div class="imgapi-row">
+            <div class="llm-field">
+              <label>比例预设</label>
+              <select id="imgApiRatio">
+                <option>16:9 横图</option>
+                <option>1:1 方图</option>
+                <option>9:16 竖图</option>
+                <option>4:3 横图</option>
+                <option>3:4 竖图</option>
+                <option>自定义</option>
+              </select>
+            </div>
+            <div class="llm-field">
+              <label>宽 (px)</label>
+              <input type="number" id="imgApiWidth" min="64" max="4096" step="8" value="1368">
+            </div>
+            <div class="llm-field">
+              <label>高 (px)</label>
+              <input type="number" id="imgApiHeight" min="64" max="4096" step="8" value="768">
+            </div>
+          </div>
+        </div>
+        <div class="imgapi-actions">
+          <button class="btn btn-sm" id="imgApiReset">恢复默认</button>
+          <button class="btn btn-sm" id="imgApiTest">测试连接</button>
+          <button class="btn btn-sm btn-primary" id="imgApiSave">保存配置</button>
+        </div>
+        <div class="imgapi-test-result" id="imgApiTestResult" style="display:none"></div>
+        <div class="imgapi-privacy">Key 仅保存在本地 localStorage，通过本地代理转发，不会上传到任何第三方</div>
+      </div>
     </div>
 
     <!-- 技能管理面板 -->
@@ -148,6 +244,9 @@
         </div>
       </div>
     </div>
+
+      </div>
+    </section>
   </div>
 </div>
 
